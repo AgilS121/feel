@@ -16,6 +16,7 @@ from . import migrate_mod
 from . import auth_mod
 from . import cache_mod
 from . import mail_mod
+from . import queue_mod
 
 
 def install_into(env):
@@ -40,6 +41,7 @@ def install_into(env):
         ('session', auth_mod.EXPORTS_SESSION),
         ('cache', cache_mod.EXPORTS),
         ('mail', mail_mod.EXPORTS),
+        ('queue', queue_mod.EXPORTS),
     ]:
         mod_env = Environment()
         for n, fn in mod_funcs.items():

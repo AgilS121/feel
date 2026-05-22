@@ -1,0 +1,49 @@
+-- Queue: enqueue, pop, complete, fail+retry, process_once.
+
+let qconn = queue.connect(":memory:")
+
+-- empty queue: pending = 0, pop returns nothing
+assert queue.pending(qconn, "emails") == 0, "empty pending"
+assert queue.pop(qconn, "emails") == nothing, "empty pop"
+
+-- enqueue 3
+let id1 = queue.enqueue(qconn, "emails", map { to: "a@x.com", subject: "Hi A" })
+let id2 = queue.enqueue(qconn, "emails", map { to: "b@x.com", subject: "Hi B" })
+let id3 = queue.enqueue(qconn, "emails", map { to: "c@x.com", subject: "Hi C" })
+assert queue.pending(qconn, "emails") == 3, "3 pending after enqueue"
+
+-- pop FIFO
+let job1 = queue.pop(qconn, "emails")
+assert job1.payload.to == "a@x.com", "pop FIFO"
+assert job1.attempts == 1, "attempts=1"
+
+-- complete: removes from queue
+queue.complete(qconn, job1.id)
+assert queue.pending(qconn, "emails") == 2, "after complete"
+
+-- fail with retries: pop B, fail it, should requeue
+let job2 = queue.pop(qconn, "emails")
+queue.fail(qconn, job2.id, "test fail")
+assert queue.pending(qconn, "emails") == 2, "still pending (requeued)"  -- C + retry-B
+
+-- process_once via handler
+let processed_count = map { n: 0 }
+
+-- accumulator via fold over a single call
+define handler taking payload -> do {
+  -- handler does nothing for this test; just verify it ran
+  payload.to
+}
+
+let did_one = queue.process_once(qconn, "emails", handler)
+assert did_one == true, "processed one"
+
+-- queue has 1 left
+assert queue.pending(qconn, "emails") == 1, "1 left after process"
+
+-- different queue isolated
+queue.enqueue(qconn, "reports", map { day: "monday" })
+assert queue.pending(qconn, "reports") == 1, "reports queue separate"
+assert queue.pending(qconn, "emails") == 1, "emails unaffected"
+
+show -> "queue_test OK"
