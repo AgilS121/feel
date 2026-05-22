@@ -23,42 +23,135 @@ Transactions:
 import sqlite3 as _sqlite
 
 
-def connect(path):
-    """Open a SQLite connection. Use ':memory:' for an in-memory database.
-
-    Autocommit mode (isolation_level=None) is used so that BEGIN/COMMIT/ROLLBACK
-    are entirely under user control. check_same_thread=False allows the
-    connection to be shared across worker threads (ThreadingHTTPServer).
+class _Conn:
+    """Unified connection wrapper. Handles paramstyle translation across
+    SQLite (?), MySQL/Postgres (%s), so user code uses ? everywhere.
     """
-    conn = _sqlite.connect(str(path), check_same_thread=False, isolation_level=None)
+    def __init__(self, raw, kind):
+        self.raw = raw
+        self.kind = kind  # 'sqlite' | 'mysql' | 'postgres'
+
+    def cursor(self):
+        return self.raw.cursor()
+
+    def close(self):
+        return self.raw.close()
+
+
+def _translate_qmark_to_pct(sql):
+    """Replace ? placeholders with %s, skipping anything inside quoted strings."""
+    out = []
+    i = 0
+    in_single = False
+    in_double = False
+    while i < len(sql):
+        c = sql[i]
+        if c == "'" and not in_double:
+            in_single = not in_single
+            out.append(c)
+        elif c == '"' and not in_single:
+            in_double = not in_double
+            out.append(c)
+        elif c == '?' and not in_single and not in_double:
+            out.append('%s')
+        else:
+            out.append(c)
+        i += 1
+    return ''.join(out)
+
+
+def connect(path):
+    """Open a database connection. The URL scheme picks the driver:
+      ./file.db or :memory:        →  SQLite (stdlib)
+      sqlite:///path               →  SQLite (explicit)
+      mysql://user:pass@host/db    →  MySQL  (requires `pip install pymysql`)
+      postgres://user:pass@host/db →  Postgres (requires `pip install psycopg2-binary`)
+
+    Autocommit mode for SQLite. For MySQL/Postgres the driver default is used —
+    use db.begin/commit/rollback for explicit transactions.
+    """
+    s = str(path)
+
+    if s.startswith('mysql://'):
+        try:
+            import pymysql
+        except ImportError:
+            raise RuntimeError(
+                "MySQL connection requires PyMySQL. Install with: pip install pymysql"
+            )
+        from urllib.parse import urlparse
+        u = urlparse(s)
+        raw = pymysql.connect(
+            host=u.hostname or 'localhost',
+            port=u.port or 3306,
+            user=u.username or '',
+            password=u.password or '',
+            database=(u.path or '/').lstrip('/'),
+            autocommit=True,
+        )
+        return _Conn(raw, 'mysql')
+
+    if s.startswith('postgres://') or s.startswith('postgresql://'):
+        try:
+            import psycopg2
+            import psycopg2.extras
+        except ImportError:
+            raise RuntimeError(
+                "PostgreSQL connection requires psycopg2. Install with: "
+                "pip install psycopg2-binary"
+            )
+        raw = psycopg2.connect(s)
+        raw.autocommit = True
+        return _Conn(raw, 'postgres')
+
+    # SQLite path (default)
+    if s.startswith('sqlite:///'):
+        s = s[len('sqlite:///'):]
+    conn = _sqlite.connect(s, check_same_thread=False, isolation_level=None)
     conn.row_factory = _sqlite.Row
-    return conn
+    return _Conn(conn, 'sqlite')
+
+
+def _prep_sql(conn, sql):
+    """Translate ? placeholders for non-SQLite drivers."""
+    if isinstance(conn, _Conn) and conn.kind != 'sqlite':
+        return _translate_qmark_to_pct(sql)
+    return sql
 
 
 def exec_(conn, sql, params=None):
-    """Execute a DDL/DML statement. Returns number of affected rows.
-
-    In autocommit mode each statement commits immediately, unless wrapped in
-    an explicit transaction.
-    """
+    """Execute a DDL/DML statement. Returns affected row count."""
     cur = conn.cursor()
+    sql2 = _prep_sql(conn, sql)
     if params is None:
-        cur.execute(sql)
+        cur.execute(sql2)
     else:
-        cur.execute(sql, _normalize_params(params))
+        cur.execute(sql2, _normalize_params(params))
     affected = cur.rowcount if cur.rowcount >= 0 else 0
     cur.close()
     return affected
 
 
+def _row_to_dict(row, cursor):
+    """Convert a row to a dict regardless of driver."""
+    if hasattr(row, 'keys'):  # sqlite Row
+        return dict(row)
+    # MySQL/Postgres: tuple + cursor.description
+    if cursor.description:
+        cols = [d[0] for d in cursor.description]
+        return dict(zip(cols, row))
+    return {}
+
+
 def query(conn, sql, params=None):
     """Run a SELECT. Returns list of dict (column name -> value)."""
     cur = conn.cursor()
+    sql2 = _prep_sql(conn, sql)
     if params is None:
-        cur.execute(sql)
+        cur.execute(sql2)
     else:
-        cur.execute(sql, _normalize_params(params))
-    rows = [dict(row) for row in cur.fetchall()]
+        cur.execute(sql2, _normalize_params(params))
+    rows = [_row_to_dict(r, cur) for r in cur.fetchall()]
     cur.close()
     return rows
 
@@ -76,7 +169,25 @@ def close(conn):
 
 
 def last_id(conn):
-    """Return the rowid of the most recent INSERT."""
+    """Return the rowid/last_insert_id of the most recent INSERT."""
+    if isinstance(conn, _Conn):
+        if conn.kind == 'sqlite':
+            cur = conn.cursor()
+            cur.execute('SELECT last_insert_rowid()')
+            val = cur.fetchone()[0]
+            cur.close()
+            return val
+        if conn.kind == 'mysql':
+            cur = conn.cursor()
+            cur.execute('SELECT LAST_INSERT_ID()')
+            val = cur.fetchone()[0]
+            cur.close()
+            return val
+        if conn.kind == 'postgres':
+            # Postgres requires RETURNING id in the INSERT statement to get this.
+            # As a fallback return 0; users should use INSERT...RETURNING id.
+            return 0
+    # legacy raw sqlite3.Connection
     cur = conn.cursor()
     cur.execute('SELECT last_insert_rowid()')
     val = cur.fetchone()[0]
