@@ -1,0 +1,39 @@
+-- M3-A + M3-B: tool & agent keywords (no tool-use loop yet — M3-C)
+
+-- tool: function with description metadata
+tool add_numbers "Add two numbers" taking a, b -> a + b
+tool greet "Greet someone by name" taking name -> "Hello, {name}!"
+
+-- tool is callable like a regular function
+assert add_numbers(2, 3) == 5, "tool callable"
+assert greet("Feel") == "Hello, Feel!", "tool with string"
+
+-- Tool metadata
+assert add_numbers.name == "add_numbers", "tool.name"
+assert add_numbers.description == "Add two numbers", "tool.description"
+assert add_numbers.parameters == ["a", "b"], "tool.parameters"
+
+-- agent: declarative
+agent helper {
+  system: "You are a helpful assistant"
+  tools: [add_numbers, greet]
+}
+
+assert helper.name == "helper", "agent.name"
+assert helper.system == "You are a helpful assistant", "agent.system"
+assert length(helper.tools) == 2, "agent.tools length"
+assert helper.tools[0].name == "add_numbers", "agent.tools[0]"
+
+-- agent.chat (mock provider returns canned response with tool count)
+let reply = helper.chat("hi there")
+assert string.starts_with(reply, "[mock-agent]"), "agent.chat returns mock-agent prefix"
+assert contains(reply, "2 tools"), "mock-agent reports tool count"
+
+-- agent with minimal config (system only)
+agent simple {
+  system: "Be concise"
+}
+assert simple.system == "Be concise", "minimal agent"
+assert length(simple.tools) == 0, "no tools default"
+
+show -> "tool_agent_test OK"

@@ -8,7 +8,8 @@ from parser import (Program, LetStmt, DefineStmt, RecordDef, ShowStmt,
                     Call, CallExpr, FieldAccess, IndexAccess, RecordLiteral, MapLiteral,
                     ListLiteral, Ident, Literal, ArrowExpr,
                     TryStmt, ThrowStmt, CatchStep, ImportStmt, AssertStmt,
-                    Block, Lambda, RouteDecl, RespondExpr, ServeStmt)
+                    Block, Lambda, RouteDecl, RespondExpr, ServeStmt,
+                    ToolDecl, AgentDecl)
 from errors import FeelError, FeelThrow
 
 
@@ -41,6 +42,85 @@ class FeelFunction:
 
     def __repr__(self):
         return f'<function {self.name}>'
+
+
+class FeelTool(FeelFunction):
+    """A function with a description, intended to be exposed to AI agents."""
+
+    def __init__(self, name, description, params, body, closure):
+        super().__init__(name, params, body, closure)
+        self.description = description
+
+    def __repr__(self):
+        return f'<tool {self.name}: {self.description!r}>'
+
+
+class FeelAgent:
+    """Declarative agent — system prompt + tools + model + .chat() with tool-use loop."""
+
+    def __init__(self, name, system='', tools=None, model=None):
+        self.name = name
+        self.system = system
+        self.tools = list(tools) if tools else []
+        self.model = model
+
+    def chat(self, message):
+        """Chat with the agent. If the LLM requests a tool, execute it and continue."""
+        from stdlib.ai_mod import chat_with_tools
+        messages = [{'role': 'user', 'content': str(message)}]
+        tool_schemas = [_tool_to_schema(t) for t in self.tools]
+
+        def executor(name, args):
+            for t in self.tools:
+                if getattr(t, 'name', None) == name:
+                    return _execute_feel_tool(t, args)
+            raise RuntimeError(f"unknown tool: {name!r}")
+
+        return chat_with_tools(
+            messages,
+            system=self.system if self.system else None,
+            tools=tool_schemas if tool_schemas else None,
+            model=self.model,
+            tool_executor=executor,
+        )
+
+    def __repr__(self):
+        tnames = [t.name for t in self.tools if hasattr(t, 'name')]
+        return f'<agent {self.name}: tools={tnames}>'
+
+
+def _tool_to_schema(tool):
+    """Convert a FeelTool to Claude's tool_use schema."""
+    if not isinstance(tool, FeelTool):
+        return None
+    properties = {}
+    for p in tool.params:
+        properties[p] = {'type': 'string', 'description': f'parameter {p}'}
+    return {
+        'name': tool.name,
+        'description': tool.description,
+        'input_schema': {
+            'type': 'object',
+            'properties': properties,
+            'required': list(tool.params),
+        }
+    }
+
+
+def _execute_feel_tool(tool, args_dict):
+    """Run a FeelTool with args provided by the LLM (dict matching parameter names)."""
+    # Map dict args to positional in declared order
+    args = [args_dict.get(p) for p in tool.params]
+    local = Environment(tool.closure)
+    for p, v in zip(tool.params, args):
+        local.set(p, v)
+    sub = Interpreter.__new__(Interpreter)
+    sub.env = local
+    sub.filename = '<tool>'
+    sub.source = None
+    sub.search_paths = []
+    sub.record_types = {}
+    return sub.eval_expr(tool.body)
 
 
 class Environment:
@@ -301,6 +381,22 @@ class Interpreter:
             serve(port=node.port)
             return None
 
+        if isinstance(node, ToolDecl):
+            tool = FeelTool(node.name, node.description, node.params, node.body, self.env)
+            self.env.set(node.name, tool)
+            return tool
+
+        if isinstance(node, AgentDecl):
+            config = {k: self.eval_expr(v) for k, v in node.config.items()}
+            agent = FeelAgent(
+                name=node.name,
+                system=config.get('system', ''),
+                tools=config.get('tools', []),
+                model=config.get('model', None),
+            )
+            self.env.set(node.name, agent)
+            return agent
+
         if isinstance(node, AssertStmt):
             cond = self.eval_expr(node.cond)
             if not cond:
@@ -449,6 +545,26 @@ class Interpreter:
                     return obj.env.get(node.field)
                 raise FeelError.runtime(node,
                     f"module '{obj.name}' has no '{node.field}'",
+                    filename=self.filename, source=self.source)
+            if isinstance(obj, FeelTool):
+                if node.field == 'name':        return obj.name
+                if node.field == 'description': return obj.description
+                if node.field == 'parameters':  return list(obj.params)
+                raise FeelError.runtime(node,
+                    f"tool '{obj.name}' has no field '{node.field}'",
+                    hint="available fields: name, description, parameters",
+                    filename=self.filename, source=self.source)
+            if isinstance(obj, FeelAgent):
+                if node.field == 'name':   return obj.name
+                if node.field == 'system': return obj.system
+                if node.field == 'tools':  return list(obj.tools)
+                if node.field == 'model':  return obj.model
+                if node.field == 'chat':
+                    # Return bound method as Python callable (works with CallExpr)
+                    return obj.chat
+                raise FeelError.runtime(node,
+                    f"agent '{obj.name}' has no field '{node.field}'",
+                    hint="available fields: name, system, tools, model, chat",
                     filename=self.filename, source=self.source)
             if isinstance(obj, dict):
                 return obj.get(node.field)

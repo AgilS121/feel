@@ -1,0 +1,49 @@
+-- Agent + tools + REST in one file.
+-- With ANTHROPIC_API_KEY set, the calculator agent uses real tool-use:
+-- Claude receives the user's natural-language math question, decides to
+-- call add/multiply tools, gets back results, and produces a final answer.
+--
+-- Without API key (mock mode), the agent returns a canned response.
+--
+-- Run:  python main.py examples/agent_api.feel
+-- Try:  curl -X POST http://localhost:3000/calc -d '{"q": "what is 12 plus 30?"}'
+
+tool add "Add two numbers and return the sum" taking a, b ->
+  number(a) + number(b)
+
+tool multiply "Multiply two numbers and return the product" taking a, b ->
+  number(a) * number(b)
+
+tool subtract "Subtract b from a" taking a, b ->
+  number(a) - number(b)
+
+agent calculator {
+  system: "You are a precise calculator. Always use the provided tools for arithmetic. Respond with just the answer."
+  tools: [add, multiply, subtract]
+}
+
+agent translator {
+  system: "You are a translator. Translate any input to Indonesian. No explanation."
+}
+
+route GET "/" -> respond map {
+  service: "Feel agents demo",
+  agents: ["calculator (with tools)", "translator (system prompt only)"]
+}
+
+route POST "/calc" -> respond map {
+  question: body.q,
+  answer: calculator.chat(body.q)
+}
+
+route POST "/translate" -> respond map {
+  original: body.text,
+  indonesian: translator.chat(body.text)
+}
+
+route GET "/tools" -> respond list.map(
+  calculator.tools,
+  fn t -> map { name: t.name, description: t.description, parameters: t.parameters }
+)
+
+serve on 3000

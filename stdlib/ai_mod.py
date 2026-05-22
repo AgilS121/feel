@@ -175,6 +175,117 @@ def chat(messages, system=None, **kwargs):
     raise RuntimeError(f"unknown AI provider: {p!r}")
 
 
+def chat_with_tools(messages, system=None, tools=None, model=None,
+                    tool_executor=None, max_iterations=8):
+    """Multi-turn chat where the LLM can call provided tools.
+
+    `tools`     : list of dicts shaped for Claude's tool_use API
+    `tool_executor` : callable(name: str, args: dict) -> result (any JSON-able)
+
+    Returns the final assistant text after all tool calls resolve.
+    """
+    p = _detect_provider()
+    if p == 'mock':
+        # Mock: ignore tools, return canned response that mentions tool count
+        n_tools = len(tools) if tools else 0
+        last_user = next((m['content'] for m in reversed(messages)
+                         if isinstance(m, dict) and m.get('role') == 'user'), '')
+        if isinstance(last_user, list):
+            last_user = str(last_user)
+        return f'[mock-agent] {n_tools} tools available. User said: {last_user[:60]!r}'
+    if p == 'claude':
+        return _claude_chat_with_tools(
+            messages, system=system, tools=tools, model=model,
+            tool_executor=tool_executor, max_iterations=max_iterations,
+        )
+    raise RuntimeError(f"unknown AI provider: {p!r}")
+
+
+def _claude_chat_with_tools(messages, system, tools, model, tool_executor, max_iterations):
+    """Implements Claude's tool_use loop."""
+    api_key = os.environ.get('ANTHROPIC_API_KEY')
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY not set; cannot use 'claude' provider")
+
+    # Copy messages so we don't mutate caller's list
+    msgs = list(messages)
+
+    for _ in range(max_iterations):
+        payload = {
+            'model': model or _model(),
+            'max_tokens': 1024,
+            'messages': msgs,
+        }
+        if system:
+            payload['system'] = system
+        if tools:
+            payload['tools'] = tools
+
+        data = _json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(
+            'https://api.anthropic.com/v1/messages',
+            data=data,
+            method='POST',
+            headers={
+                'Content-Type': 'application/json',
+                'x-api-key': api_key,
+                'anthropic-version': '2023-06-01',
+            }
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                body = _json.loads(resp.read().decode('utf-8'))
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode('utf-8', errors='replace')
+            raise RuntimeError(f'Claude API error {e.code}: {err_body}')
+
+        content = body.get('content', [])
+        stop_reason = body.get('stop_reason')
+
+        if stop_reason != 'tool_use':
+            # Final answer — concatenate text blocks
+            texts = [b['text'] for b in content if b.get('type') == 'text']
+            return '\n'.join(texts).strip()
+
+        # Append the assistant message that requested tool use, verbatim
+        msgs.append({'role': 'assistant', 'content': content})
+
+        # Execute every tool_use block, build tool_result blocks
+        tool_results = []
+        for block in content:
+            if block.get('type') != 'tool_use':
+                continue
+            name = block['name']
+            args = block.get('input', {})
+            tool_use_id = block['id']
+            try:
+                result = tool_executor(name, args) if tool_executor else None
+                result_str = _stringify(result)
+                tool_results.append({
+                    'type': 'tool_result',
+                    'tool_use_id': tool_use_id,
+                    'content': result_str,
+                })
+            except Exception as exc:
+                tool_results.append({
+                    'type': 'tool_result',
+                    'tool_use_id': tool_use_id,
+                    'content': f'tool error: {exc}',
+                    'is_error': True,
+                })
+
+        msgs.append({'role': 'user', 'content': tool_results})
+
+    raise RuntimeError(f'chat_with_tools: exceeded {max_iterations} tool-use iterations')
+
+
+def _stringify(v):
+    if v is None: return ''
+    if isinstance(v, (dict, list)):
+        return _json.dumps(v)
+    return str(v)
+
+
 def provider():
     """Return the currently-active provider name."""
     return _detect_provider()

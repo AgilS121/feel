@@ -161,6 +161,23 @@ class ServeStmt(Node):
     def __init__(self, port): self.port = port
 
 
+class ToolDecl(Node):
+    """tool NAME "description" taking p1, p2 -> body — function with metadata for AI."""
+    def __init__(self, name, description, params, body):
+        self.name = name
+        self.description = description
+        self.params = params
+        self.body = body
+
+
+class AgentDecl(Node):
+    """agent NAME { system: ..., tools: [...], model: ... } — declarative agent."""
+    def __init__(self, name, config):
+        # config: dict of field_name -> expression node
+        self.name = name
+        self.config = config
+
+
 class Ident(Node):
     def __init__(self, name): self.name = name
 
@@ -229,6 +246,7 @@ class Parser:
         'TRY', 'CATCH', 'THROW', 'ERROR', 'MAP',
         'IMPORT', 'FROM', 'EXPOSE', 'ASSERT', 'FN', 'DO',
         'ROUTE', 'RESPOND', 'SERVE', 'ON', 'EXPECTS',
+        'TOOL', 'AGENT',
     }
 
     # Token types yang bisa mulai sebuah ekspresi (untuk lookahead di respond)
@@ -303,6 +321,8 @@ class Parser:
         if t.type == 'ASSERT': return self.parse_assert()
         if t.type == 'ROUTE': return self.parse_route()
         if t.type == 'SERVE': return self.parse_serve()
+        if t.type == 'TOOL': return self.parse_tool()
+        if t.type == 'AGENT': return self.parse_agent()
         return self.parse_expr_stmt()
 
     def parse_let(self):
@@ -470,6 +490,52 @@ class Parser:
         port_tok = self.expect('NUMBER', hint="'on' must be followed by a port number")
         port = int(port_tok.value)
         return _pos(ServeStmt(port), t)
+
+    def parse_tool(self):
+        t = self.advance()  # tool
+        name_tok = self.expect('IDENT', hint="'tool' must be followed by a tool name")
+        name = name_tok.value
+        self.check_snake_case(name, name_tok, "tool")
+        desc_tok = self.expect('STRING', hint="tool name must be followed by a description string")
+        description = desc_tok.value
+        params = []
+        if self.current() and self.current().type == 'TAKING':
+            self.advance()
+            while self.current() and self.current().type == 'IDENT':
+                p_tok = self.advance()
+                self.check_snake_case(p_tok.value, p_tok, "parameter")
+                params.append(p_tok.value)
+                if self.current() and self.current().type == 'COMMA':
+                    self.advance()
+                else:
+                    break
+        self.expect('ARROW', hint="tool parameters must be followed by '->' then the body")
+        body = self.parse_expr()
+        return _pos(ToolDecl(name, description, params, body), t)
+
+    def parse_agent(self):
+        t = self.advance()  # agent
+        name_tok = self.expect('IDENT', hint="'agent' must be followed by an agent name")
+        name = name_tok.value
+        self.check_snake_case(name, name_tok, "agent")
+        self.expect('LBRACE', hint="agent name must be followed by '{ system: ..., tools: ..., ... }'")
+        config = {}
+        self.skip_newlines()
+        while self.current() and self.current().type != 'RBRACE':
+            f_tok = self.current()
+            if f_tok.type not in self._NAME_LIKE:
+                raise FeelError.syntax(f_tok, "agent field name expected",
+                                       filename=self.filename, source=self.source)
+            self.advance()
+            self.expect('COLON', hint="agent field name must be followed by ':'")
+            value = self.parse_expr()
+            config[f_tok.value] = value
+            self.skip_newlines()
+            if self.current() and self.current().type == 'COMMA':
+                self.advance()
+            self.skip_newlines()
+        self.expect('RBRACE')
+        return _pos(AgentDecl(name, config), t)
 
     def parse_respond(self):
         t = self.advance()  # respond
