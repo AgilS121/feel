@@ -639,16 +639,16 @@ class Parser:
             entries = []
             self.skip_newlines()
             while self.current() and self.current().type != 'RBRACE':
-                # key bisa IDENT atau STRING
+                # key can be identifier (or keyword used as name), or string literal
                 k_tok = self.current()
-                if k_tok.type == 'IDENT':
+                if k_tok.type in self._NAME_LIKE:
                     self.advance()
                     key_node = _pos(Literal(k_tok.value), k_tok)
                 elif k_tok.type == 'STRING':
                     self.advance()
                     key_node = _pos(Literal(k_tok.value), k_tok)
                 else:
-                    raise FeelError.syntax(k_tok, "key map harus identifier atau string",
+                    raise FeelError.syntax(k_tok, "map key must be an identifier or string",
                                            filename=self.filename, source=self.source)
                 self.expect('COLON', hint="map key must be followed by ':'")
                 v = self.parse_expr()

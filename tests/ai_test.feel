@@ -1,0 +1,30 @@
+-- AI primitives — mock provider (deterministic, no network)
+-- Set FEEL_AI_PROVIDER=mock to ensure deterministic output
+
+assert ai.provider() == "mock", "default provider is mock (no API key set)"
+
+-- ai.ask
+let r1 = ai.ask("What is 2+2?")
+assert string.starts_with(r1, "[mock-ai]"), "mock ask returns mock prefix"
+
+-- ai.summarize
+let long_text = "Feel is a programming language. It compiles to Go. It is AI-predictable."
+let s = ai.summarize(long_text)
+assert string.starts_with(s, "[mock-summary]"), "mock summarize returns mock prefix"
+
+-- ai.classify
+let label = ai.classify("Server returns 500 error", ["bug", "feature", "question"])
+assert (label == "bug") or (label == "feature") or (label == "question"), "classify picks one option"
+
+-- Deterministic: same text + options = same result
+let label2 = ai.classify("Server returns 500 error", ["bug", "feature", "question"])
+assert label == label2, "classify is deterministic in mock"
+
+-- ai.chat
+let msgs = [
+  map { role: "user", content: "Hello there" }
+]
+let reply = ai.chat(msgs)
+assert string.starts_with(reply, "[mock-chat]"), "mock chat returns mock prefix"
+
+show -> "ai_test OK"
