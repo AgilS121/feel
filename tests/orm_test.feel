@@ -1,0 +1,51 @@
+-- ORM-lite query builder: find/where/order_by/take/all/first/count.
+
+let conn = db.connect(":memory:")
+db.exec(conn, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
+db.exec(conn, "INSERT INTO users (name, age) VALUES (?, ?)", ["Ana", 22])
+db.exec(conn, "INSERT INTO users (name, age) VALUES (?, ?)", ["Budi", 25])
+db.exec(conn, "INSERT INTO users (name, age) VALUES (?, ?)", ["Citra", 30])
+db.exec(conn, "INSERT INTO users (name, age) VALUES (?, ?)", ["Doni", 17])
+
+-- Direct style
+let adults_d = db.all(db.where(db.find(conn, "users"), "age", ">=", 18))
+assert length(adults_d) == 3, "3 adults via direct"
+
+-- Pipeline style (curried)
+let adults_p = db.find(conn, "users")
+  | db.where("age", ">=", 18)
+  | db.order_by("name")
+  | db.all
+
+assert length(adults_p) == 3, "3 adults via pipeline"
+assert adults_p[0].name == "Ana", "ordered by name asc"
+assert adults_p[2].name == "Citra", "third is Citra"
+
+-- Take limits
+let top2 = db.find(conn, "users")
+  | db.order_by("age", "DESC")
+  | db.take(2)
+  | db.all
+assert length(top2) == 2, "take 2"
+assert top2[0].name == "Citra", "oldest first"
+
+-- First returns one
+let oldest = db.find(conn, "users")
+  | db.order_by("age", "DESC")
+  | db.first
+assert oldest.name == "Citra", "first"
+
+-- Count
+let n = db.find(conn, "users")
+  | db.where("age", ">=", 18)
+  | db.count
+assert n == 3, "count adults = 3"
+
+-- No matches
+let none = db.find(conn, "users")
+  | db.where("age", ">", 100)
+  | db.first
+assert none == nothing, "no matches → nothing"
+
+db.close(conn)
+show -> "orm_test OK"

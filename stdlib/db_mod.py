@@ -276,3 +276,154 @@ EXPORTS = {
     'rollback':    rollback,
     'transaction': transaction,
 }
+
+
+# ---------- ORM-lite query builder ----------
+
+class _Query:
+    """Mutable query builder. Each chained call mutates and returns self
+    so pipeline-style and direct-style both work."""
+    __slots__ = ('conn', 'table', 'wheres', 'order', 'limit_n', 'offset_n')
+
+    def __init__(self, conn, table):
+        self.conn = conn
+        self.table = table
+        self.wheres = []          # list of (col, op, val)
+        self.order = None         # (col, direction)
+        self.limit_n = None
+        self.offset_n = None
+
+    def clone(self):
+        q = _Query(self.conn, self.table)
+        q.wheres = list(self.wheres)
+        q.order = self.order
+        q.limit_n = self.limit_n
+        q.offset_n = self.offset_n
+        return q
+
+
+def find(conn, table):
+    """Start a query for a table. Returns a query object."""
+    return _Query(conn, str(table))
+
+
+def _is_query(x):
+    return isinstance(x, _Query)
+
+
+def _add_where(q, col, op, val):
+    q.wheres.append((str(col), str(op), val))
+    return q
+
+
+def where(*args):
+    """db.where(query, col, op, val)  — direct
+       db.where(col, op, val)         — curried; returns fn(query) for pipelines"""
+    if args and _is_query(args[0]):
+        if len(args) != 4:
+            raise ValueError("where: expected (query, col, op, val)")
+        return _add_where(args[0], args[1], args[2], args[3])
+    if len(args) == 3:
+        col, op, val = args
+        return lambda q: _add_where(q, col, op, val)
+    raise ValueError("where: expected (col, op, val) or (query, col, op, val)")
+
+
+def _add_order(q, col, direction):
+    q.order = (str(col), 'DESC' if str(direction).upper() == 'DESC' else 'ASC')
+    return q
+
+
+def order_by(*args):
+    """db.order_by(query, col [, direction])
+       db.order_by(col [, direction])  — curried"""
+    if args and _is_query(args[0]):
+        q = args[0]
+        col = args[1]
+        direction = args[2] if len(args) >= 3 else 'ASC'
+        return _add_order(q, col, direction)
+    col = args[0]
+    direction = args[1] if len(args) >= 2 else 'ASC'
+    return lambda q: _add_order(q, col, direction)
+
+
+def take(*args):
+    """db.take(query, n)  /  db.take(n)  — curried"""
+    if args and _is_query(args[0]):
+        args[0].limit_n = int(args[1])
+        return args[0]
+    n = int(args[0])
+    return lambda q: (setattr(q, 'limit_n', n) or q)
+
+
+def offset(*args):
+    if args and _is_query(args[0]):
+        args[0].offset_n = int(args[1])
+        return args[0]
+    n = int(args[0])
+    return lambda q: (setattr(q, 'offset_n', n) or q)
+
+
+def _build_sql(q):
+    sql = f'SELECT * FROM {q.table}'
+    params = []
+    if q.wheres:
+        parts = []
+        for col, op, val in q.wheres:
+            parts.append(f'{col} {op} ?')
+            params.append(val)
+        sql += ' WHERE ' + ' AND '.join(parts)
+    if q.order:
+        sql += f' ORDER BY {q.order[0]} {q.order[1]}'
+    if q.limit_n is not None:
+        sql += f' LIMIT {q.limit_n}'
+    if q.offset_n is not None:
+        sql += f' OFFSET {q.offset_n}'
+    return sql, params
+
+
+def all_(q):
+    """Execute the query and return all matching rows."""
+    if not _is_query(q):
+        raise ValueError("all: expected a query")
+    sql, params = _build_sql(q)
+    return query(q.conn, sql, params)
+
+
+def first(q):
+    """Execute, return the first row or nothing."""
+    if not _is_query(q):
+        raise ValueError("first: expected a query")
+    q2 = q.clone()
+    q2.limit_n = 1
+    sql, params = _build_sql(q2)
+    rows = query(q.conn, sql, params)
+    return rows[0] if rows else None
+
+
+def count(q):
+    """Execute COUNT(*) instead of SELECT *."""
+    if not _is_query(q):
+        raise ValueError("count: expected a query")
+    sql = f'SELECT COUNT(*) AS n FROM {q.table}'
+    params = []
+    if q.wheres:
+        parts = []
+        for col, op, val in q.wheres:
+            parts.append(f'{col} {op} ?')
+            params.append(val)
+        sql += ' WHERE ' + ' AND '.join(parts)
+    rows = query(q.conn, sql, params)
+    return rows[0]['n'] if rows else 0
+
+
+EXPORTS.update({
+    'find':     find,
+    'where':    where,
+    'order_by': order_by,
+    'take':     take,
+    'offset':   offset,
+    'all':      all_,
+    'first':    first,
+    'count':    count,
+})
