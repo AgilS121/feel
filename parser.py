@@ -1,5 +1,23 @@
+import re
+
 from lexer import tokenize
 from errors import FeelError
+
+
+# Naming convention regex (enforced by parser, not linter)
+_SNAKE_CASE = re.compile(r'^[a-z_][a-z0-9_]*$')
+_PASCAL_CASE = re.compile(r'^[A-Z][a-zA-Z0-9]*$')
+
+
+def _to_snake(name):
+    """Convert PascalCase or camelCase to snake_case (for hint)."""
+    s1 = re.sub(r'(.)([A-Z][a-z]+)', r'\1_\2', name)
+    return re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
+
+def _to_pascal(name):
+    """Convert snake_case to PascalCase (for hint)."""
+    return ''.join(part.capitalize() for part in name.split('_'))
 
 
 # AST Nodes
@@ -113,6 +131,16 @@ class ListLiteral(Node):
     def __init__(self, items): self.items = items
 
 
+class Block(Node):
+    """do { stmt; stmt; expr } — sequence of statements, last value returned."""
+    def __init__(self, stmts): self.stmts = stmts
+
+
+class Lambda(Node):
+    """fn x, y -> expr — anonymous function with closure."""
+    def __init__(self, params, body): self.params = params; self.body = body
+
+
 class Ident(Node):
     def __init__(self, name): self.name = name
 
@@ -179,8 +207,26 @@ class Parser:
         'WHEN', 'OTHERWISE', 'REPEAT', 'TIMES', 'FOR', 'IN',
         'AND', 'OR', 'NOT', 'TRUE', 'FALSE', 'NOTHING',
         'TRY', 'CATCH', 'THROW', 'ERROR', 'MAP',
-        'IMPORT', 'FROM', 'EXPOSE', 'ASSERT',
+        'IMPORT', 'FROM', 'EXPOSE', 'ASSERT', 'FN', 'DO',
     }
+
+    def check_snake_case(self, name, token, kind):
+        """Enforce snake_case for variables, functions, parameters."""
+        if not _SNAKE_CASE.match(name):
+            suggested = _to_snake(name)
+            raise FeelError.syntax(token,
+                f"{kind} name '{name}' must be snake_case",
+                hint=f"rename to '{suggested}'",
+                filename=self.filename, source=self.source)
+
+    def check_pascal_case(self, name, token, kind):
+        """Enforce PascalCase for record types."""
+        if not _PASCAL_CASE.match(name):
+            suggested = _to_pascal(name)
+            raise FeelError.syntax(token,
+                f"{kind} name '{name}' must be PascalCase",
+                hint=f"rename to '{suggested}'",
+                filename=self.filename, source=self.source)
 
     def expect_name(self, hint=None):
         """Terima IDENT atau keyword sebagai nama (untuk method/field access)."""
@@ -229,19 +275,25 @@ class Parser:
 
     def parse_let(self):
         t = self.advance()  # let
-        name = self.expect('IDENT', hint="'let' must be followed by a variable name").value
+        name_tok = self.expect('IDENT', hint="'let' must be followed by a variable name")
+        name = name_tok.value
+        self.check_snake_case(name, name_tok, "variable")
         self.expect('ASSIGN', hint="variable name must be followed by '='")
         value = self.parse_expr()
         return _pos(LetStmt(name, value), t)
 
     def parse_define(self):
         t = self.advance()  # define
-        name = self.expect('IDENT', hint="'define' must be followed by a function name").value
+        name_tok = self.expect('IDENT', hint="'define' must be followed by a function name")
+        name = name_tok.value
+        self.check_snake_case(name, name_tok, "function")
         params = []
         if self.current() and self.current().type == 'TAKING':
             self.advance()
             while self.current() and self.current().type == 'IDENT':
-                params.append(self.advance().value)
+                p_tok = self.advance()
+                self.check_snake_case(p_tok.value, p_tok, "parameter")
+                params.append(p_tok.value)
                 if self.current() and self.current().type == 'COMMA':
                     self.advance()
                 else:
@@ -252,15 +304,18 @@ class Parser:
 
     def parse_record(self):
         t = self.advance()  # record
-        name = self.expect('IDENT', hint="'record' must be followed by a record name").value
+        name_tok = self.expect('IDENT', hint="'record' must be followed by a record name")
+        name = name_tok.value
+        self.check_pascal_case(name, name_tok, "record")
         self.expect('LBRACE')
         fields = {}
         self.skip_newlines()
         while self.current() and self.current().type != 'RBRACE':
-            fname = self.expect('IDENT').value
+            fname_tok = self.expect('IDENT')
+            self.check_snake_case(fname_tok.value, fname_tok, "field")
             self.expect('COLON')
             ftype = self.expect('IDENT').value
-            fields[fname] = ftype
+            fields[fname_tok.value] = ftype
             self.skip_newlines()
             if self.current() and self.current().type == 'COMMA':
                 self.advance()
@@ -582,6 +637,34 @@ class Parser:
         if t.type == 'WHEN':
             # 'when COND -> THEN otherwise -> ELSE' sebagai ekspresi
             return self.parse_when()
+
+        if t.type == 'DO':
+            # 'do { stmt; stmt; expr }' block expression
+            t_do = self.advance()
+            self.expect('LBRACE', hint="'do' must be followed by '{'")
+            stmts = []
+            self.skip_newlines()
+            while self.current() and self.current().type != 'RBRACE':
+                stmts.append(self.parse_stmt())
+                self.skip_newlines()
+            self.expect('RBRACE', hint="expected closing '}' for do-block")
+            return _pos(Block(stmts), t_do)
+
+        if t.type == 'FN':
+            # 'fn x, y -> expr' lambda
+            t_fn = self.advance()
+            params = []
+            while self.current() and self.current().type == 'IDENT':
+                p_tok = self.advance()
+                self.check_snake_case(p_tok.value, p_tok, "parameter")
+                params.append(p_tok.value)
+                if self.current() and self.current().type == 'COMMA':
+                    self.advance()
+                else:
+                    break
+            self.expect('ARROW', hint="lambda parameters must be followed by '->' then the body")
+            body = self.parse_expr()
+            return _pos(Lambda(params, body), t_fn)
 
         if t.type == 'TRY':
             # 'try EXPR catch NAME -> EXPR' sebagai ekspresi

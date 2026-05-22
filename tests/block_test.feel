@@ -1,0 +1,34 @@
+-- do { } block expression — multi-statement, returns last value
+let result = do {
+  let a = 5
+  let b = 10
+  a + b
+}
+assert result == 15, "block returns last expression"
+
+-- Block creates new scope (vars don't leak)
+let outer = 1
+let r2 = do {
+  let outer = 99
+  outer * 2
+}
+assert r2 == 198, "block uses inner outer"
+assert outer == 1, "outer not modified"
+
+-- Block in function body (multi-step function)
+define complex_calc taking n -> do {
+  let doubled = n * 2
+  let squared = doubled * doubled
+  squared + 1
+}
+assert complex_calc(3) == 37, "block as function body (3*2=6, 6*6=36, +1=37)"
+
+-- Block can contain show stmts
+let final = do {
+  show -> "step 1"
+  show -> "step 2"
+  42
+}
+assert final == 42, "block ignores show return, uses last expr"
+
+show -> "block_test OK"

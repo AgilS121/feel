@@ -7,7 +7,8 @@ from parser import (Program, LetStmt, DefineStmt, RecordDef, ShowStmt,
                     WhenStmt, RepeatStmt, ForStmt, Pipeline, BinOp, UnaryOp,
                     Call, CallExpr, FieldAccess, IndexAccess, RecordLiteral, MapLiteral,
                     ListLiteral, Ident, Literal, ArrowExpr,
-                    TryStmt, ThrowStmt, CatchStep, ImportStmt, AssertStmt)
+                    TryStmt, ThrowStmt, CatchStep, ImportStmt, AssertStmt,
+                    Block, Lambda)
 from errors import FeelError, FeelThrow
 
 
@@ -475,6 +476,23 @@ class Interpreter:
 
         if isinstance(node, ListLiteral):
             return [self.eval_expr(i) for i in node.items]
+
+        if isinstance(node, Block):
+            # New scope, run all stmts, return last value
+            local = Environment(self.env)
+            old_env = self.env
+            self.env = local
+            try:
+                result = None
+                for stmt in node.stmts:
+                    result = self.eval_stmt(stmt)
+                return result
+            finally:
+                self.env = old_env
+
+        if isinstance(node, Lambda):
+            # Anonymous function — closure captures current env
+            return FeelFunction('<lambda>', node.params, node.body, self.env)
 
         if isinstance(node, ThrowStmt):
             val = self.eval_expr(node.expr)

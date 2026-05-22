@@ -1,0 +1,45 @@
+-- Basic lambda
+let add = fn x, y -> x + y
+assert add(2, 3) == 5, "basic lambda"
+
+-- Lambda with no args
+let always_42 = fn -> 42
+assert always_42() == 42, "no-arg lambda"
+
+-- Lambda passed to list.map
+let nums = [1, 2, 3, 4]
+let doubled = list.map(nums, fn x -> x * 2)
+assert doubled == [2, 4, 6, 8], "lambda in map"
+
+-- Lambda passed to list.filter
+let evens = list.filter(nums, fn x -> x == 2 or x == 4)
+assert evens == [2, 4], "lambda in filter"
+
+-- Lambda passed to list.fold
+let total = list.fold(nums, 0, fn acc, x -> acc + x)
+assert total == 10, "lambda in fold"
+
+-- Lambda closure captures outer variable
+let multiplier = 3
+let triple = fn x -> x * multiplier
+assert triple(5) == 15, "closure over outer var"
+
+-- Find by id via lambda (the M1 limitation now solved)
+let users = [
+  map { id: 1, name: "Ana" },
+  map { id: 2, name: "Bob" },
+  map { id: 3, name: "Carol" }
+]
+let target_id = 2
+let found = first(list.filter(users, fn u -> u.id == target_id))
+assert found.name == "Bob", "closure with map access"
+
+-- Lambda with block body
+let with_block = fn x -> do {
+  let doubled = x * 2
+  let plus_one = doubled + 1
+  plus_one
+}
+assert with_block(5) == 11, "lambda + block body"
+
+show -> "lambda_test OK"

@@ -1,0 +1,14 @@
+-- Valid snake_case names — should all pass
+let user_name = "Budi"
+let age_in_years = 25
+let _internal = "ok"
+
+define greet_user taking user_name -> "Halo {user_name}"
+assert greet_user("X") == "Halo X", "snake_case identifier"
+
+-- Valid PascalCase record
+record UserRecord { user_name: text, age_in_years: number }
+let u = UserRecord { user_name: "X", age_in_years: 10 }
+assert u.user_name == "X", "PascalCase record + snake_case field"
+
+show -> "naming_test OK"
