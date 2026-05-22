@@ -1,0 +1,60 @@
+-- crypto module: password hashing, JWT, HMAC, random, base64
+
+-- 1. hash_password / verify_password
+let hash = crypto.hash_password("correct-horse")
+assert string.starts_with(hash, "pbkdf2_sha256$"), "hash has version prefix"
+assert crypto.verify_password("correct-horse", hash) == true, "verify correct"
+assert crypto.verify_password("wrong", hash) == false, "verify wrong"
+
+-- Distinct salts → distinct hashes for same password
+let hash2 = crypto.hash_password("correct-horse")
+assert hash != hash2, "salt makes hashes differ"
+assert crypto.verify_password("correct-horse", hash2) == true, "still verifies"
+
+-- 2. JWT sign + verify (roundtrip)
+let secret = "my-super-secret-key"
+let payload = map { sub: "user:123", role: "admin" }
+let token = crypto.jwt_sign(payload, secret)
+
+-- Token has 3 dot-separated parts
+let parts = split(token, ".")
+assert length(parts) == 3, "JWT has 3 parts"
+
+-- Verify with correct secret returns payload
+let back = crypto.jwt_verify(token, secret)
+assert back != nothing, "verify ok"
+assert back.sub == "user:123", "sub roundtrip"
+assert back.role == "admin", "role roundtrip"
+
+-- Verify with wrong secret returns nothing
+assert crypto.jwt_verify(token, "wrong-secret") == nothing, "wrong secret rejected"
+
+-- Tampering with payload breaks verification
+let tampered = parts[0] + "." + crypto.base64_encode("evil") + "." + parts[2]
+assert crypto.jwt_verify(tampered, secret) == nothing, "tampered token rejected"
+
+-- 3. HMAC-SHA256
+let mac = crypto.hmac_sha256("k", "hello")
+assert length(mac) == 64, "sha256 hex = 64 chars"
+-- Deterministic
+assert crypto.hmac_sha256("k", "hello") == mac, "deterministic"
+-- Different key/msg → different output
+assert crypto.hmac_sha256("k", "world") != mac, "msg matters"
+assert crypto.hmac_sha256("other", "hello") != mac, "key matters"
+
+-- 4. Random
+let token1 = crypto.random_token(16)
+let token2 = crypto.random_token(16)
+assert token1 != token2, "random tokens differ"
+assert length(token1) > 10, "non-trivial length"
+
+let hex1 = crypto.random_bytes(8)
+assert length(hex1) == 16, "8 bytes = 16 hex chars"
+
+-- 5. Base64 roundtrip
+let original = "Hello, Feel! 🌊"
+let encoded = crypto.base64_encode(original)
+let decoded = crypto.base64_decode(encoded)
+assert decoded == original, "base64 roundtrip preserves utf-8"
+
+show -> "crypto_test OK"

@@ -1,0 +1,51 @@
+-- M4-E: crypto module compiles to Go.
+
+-- Password hashing
+let hashed = crypto.hash_password("correct-horse")
+show -> "Hashed length:"
+show -> length(hashed)
+
+let ok = crypto.verify_password("correct-horse", hashed)
+let bad = crypto.verify_password("wrong-password", hashed)
+show -> "Verify correct:"
+show -> ok
+show -> "Verify wrong:"
+show -> bad
+
+-- JWT roundtrip
+let secret = "my-super-secret"
+let payload = map { sub: "user:123", role: "admin" }
+let token = crypto.jwt_sign(payload, secret)
+let parts = split(token, ".")
+show -> "JWT segments:"
+show -> length(parts)
+
+let back = crypto.jwt_verify(token, secret)
+show -> "JWT sub:"
+show -> back.sub
+show -> "JWT role:"
+show -> back.role
+
+let wrong_secret = crypto.jwt_verify(token, "evil")
+show -> "Wrong-secret rejected:"
+show -> wrong_secret == nothing
+
+-- HMAC
+let mac = crypto.hmac_sha256("k", "hello")
+show -> "HMAC length:"
+show -> length(mac)
+
+-- Random
+let token_a = crypto.random_token(16)
+let token_b = crypto.random_token(16)
+show -> "Random differs:"
+show -> token_a != token_b
+
+-- Base64
+let original = "Hello, Feel!"
+let enc = crypto.base64_encode(original)
+let dec = crypto.base64_decode(enc)
+show -> "Base64 roundtrip:"
+show -> dec == original
+
+show -> "m4e_crypto OK"

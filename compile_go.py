@@ -449,7 +449,7 @@ BUILTINS_GO = {
     'rest', 'push', 'join', 'split', 'contains',
 }
 
-STDLIB_MODULES = {'string', 'list', 'map', 'json', 'ai', 'db', 'security'}
+STDLIB_MODULES = {'string', 'list', 'map', 'json', 'ai', 'db', 'security', 'crypto'}
 
 
 def _is_builtin(name):
@@ -486,8 +486,15 @@ RUNTIME_GO = r'''package main
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
 	"net/url"
@@ -1577,6 +1584,191 @@ var feel_ai_mod = map[string]any{
 	"classify":  any(feel_ai_classify),
 	"chat":      any(func(args ...any) any { if len(args) == 0 { return any(nil) }; return feel_ai_chat(args[0], args[1:]...) }),
 	"provider":  any(func() any { return any(feel_ai_provider()) }),
+}
+
+// ---------- Crypto primitives ----------
+
+func feel_pbkdf2_sha256(password, salt []byte, iterations, keyLen int) []byte {
+	h := func() hash.Hash { return sha256.New() }
+	hashLen := h().Size()
+	numBlocks := (keyLen + hashLen - 1) / hashLen
+	out := make([]byte, 0, numBlocks*hashLen)
+	buf := make([]byte, 4)
+	for block := 1; block <= numBlocks; block++ {
+		binary.BigEndian.PutUint32(buf, uint32(block))
+		u := hmac.New(h, password)
+		u.Write(salt)
+		u.Write(buf)
+		currentU := u.Sum(nil)
+		result := make([]byte, hashLen)
+		copy(result, currentU)
+		for i := 1; i < iterations; i++ {
+			u = hmac.New(h, password)
+			u.Write(currentU)
+			currentU = u.Sum(nil)
+			for j := range result {
+				result[j] ^= currentU[j]
+			}
+		}
+		out = append(out, result...)
+	}
+	return out[:keyLen]
+}
+
+func feel_crypto_hash_password(args ...any) any {
+	password := feel_str(args[0])
+	iters := 100000
+	if len(args) >= 2 {
+		iters = int(feel_num(args[1]))
+	}
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		panic(feel_throw{value: any("crypto.hash_password: rand failed: " + err.Error())})
+	}
+	derived := feel_pbkdf2_sha256([]byte(password), salt, iters, 32)
+	return any(fmt.Sprintf("pbkdf2_sha256$%d$%s$%s",
+		iters,
+		base64.StdEncoding.EncodeToString(salt),
+		base64.StdEncoding.EncodeToString(derived)))
+}
+
+func feel_crypto_verify_password(password, hashed any) any {
+	parts := strings.Split(feel_str(hashed), "$")
+	if len(parts) != 4 {
+		return any(false)
+	}
+	if parts[0] != "pbkdf2_sha256" {
+		return any(false)
+	}
+	var iters int
+	if _, err := fmt.Sscanf(parts[1], "%d", &iters); err != nil {
+		return any(false)
+	}
+	salt, err := base64.StdEncoding.DecodeString(parts[2])
+	if err != nil {
+		return any(false)
+	}
+	expected, err := base64.StdEncoding.DecodeString(parts[3])
+	if err != nil {
+		return any(false)
+	}
+	derived := feel_pbkdf2_sha256([]byte(feel_str(password)), salt, iters, len(expected))
+	return any(hmac.Equal(derived, expected))
+}
+
+func feel_b64url_encode(data []byte) string {
+	return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(data)
+}
+
+func feel_b64url_decode(s string) ([]byte, error) {
+	return base64.URLEncoding.WithPadding(base64.NoPadding).DecodeString(s)
+}
+
+func feel_crypto_jwt_sign(payload, secret any) any {
+	pm, ok := payload.(map[string]any)
+	if !ok {
+		panic(feel_throw{value: any("jwt_sign: payload must be a map")})
+	}
+	headerBytes, _ := json.Marshal(map[string]any{"alg": "HS256", "typ": "JWT"})
+	// Compact + sorted-keys JSON for byte-stable signing across implementations.
+	payloadBytes, err := json.Marshal(feel_to_jsonable(pm))
+	if err != nil {
+		panic(feel_throw{value: any("jwt_sign: encode error: " + err.Error())})
+	}
+	hEnc := feel_b64url_encode(headerBytes)
+	pEnc := feel_b64url_encode(payloadBytes)
+	signingInput := hEnc + "." + pEnc
+	mac := hmac.New(sha256.New, []byte(feel_str(secret)))
+	mac.Write([]byte(signingInput))
+	sig := mac.Sum(nil)
+	return any(signingInput + "." + feel_b64url_encode(sig))
+}
+
+func feel_crypto_jwt_verify(token, secret any) any {
+	parts := strings.Split(feel_str(token), ".")
+	if len(parts) != 3 {
+		return any(nil)
+	}
+	signingInput := parts[0] + "." + parts[1]
+	mac := hmac.New(sha256.New, []byte(feel_str(secret)))
+	mac.Write([]byte(signingInput))
+	expected := mac.Sum(nil)
+	actual, err := feel_b64url_decode(parts[2])
+	if err != nil || !hmac.Equal(expected, actual) {
+		return any(nil)
+	}
+	payloadBytes, err := feel_b64url_decode(parts[1])
+	if err != nil {
+		return any(nil)
+	}
+	var decoded any
+	if err := json.Unmarshal(payloadBytes, &decoded); err != nil {
+		return any(nil)
+	}
+	return feel_from_jsonable(decoded)
+}
+
+func feel_crypto_hmac_sha256(key, message any) any {
+	mac := hmac.New(sha256.New, []byte(feel_str(key)))
+	mac.Write([]byte(feel_str(message)))
+	return any(hex.EncodeToString(mac.Sum(nil)))
+}
+
+func feel_crypto_random_bytes(n any) any {
+	count := int(feel_num(n))
+	if count <= 0 {
+		return any("")
+	}
+	buf := make([]byte, count)
+	if _, err := rand.Read(buf); err != nil {
+		panic(feel_throw{value: any("crypto.random_bytes: " + err.Error())})
+	}
+	return any(hex.EncodeToString(buf))
+}
+
+func feel_crypto_random_token(args ...any) any {
+	count := 32
+	if len(args) >= 1 {
+		count = int(feel_num(args[0]))
+	}
+	if count <= 0 {
+		return any("")
+	}
+	buf := make([]byte, count)
+	if _, err := rand.Read(buf); err != nil {
+		panic(feel_throw{value: any("crypto.random_token: " + err.Error())})
+	}
+	return any(feel_b64url_encode(buf))
+}
+
+func feel_crypto_base64_encode(data any) any {
+	var raw []byte
+	if b, ok := data.([]byte); ok {
+		raw = b
+	} else {
+		raw = []byte(feel_str(data))
+	}
+	return any(base64.StdEncoding.EncodeToString(raw))
+}
+
+func feel_crypto_base64_decode(s any) any {
+	b, err := base64.StdEncoding.DecodeString(feel_str(s))
+	if err != nil {
+		panic(feel_throw{value: any("base64_decode: " + err.Error())})
+	}
+	return any(string(b))
+}
+
+var feel_crypto_mod = map[string]any{
+	"hash_password":   any(feel_crypto_hash_password),
+	"verify_password": any(feel_crypto_verify_password),
+	"jwt_sign":        any(feel_crypto_jwt_sign),
+	"jwt_verify":      any(feel_crypto_jwt_verify),
+	"hmac_sha256":     any(feel_crypto_hmac_sha256),
+	"random_bytes":    any(feel_crypto_random_bytes),
+	"random_token":    any(feel_crypto_random_token),
+	"base64_encode":   any(feel_crypto_base64_encode),
+	"base64_decode":   any(feel_crypto_base64_decode),
 }
 
 // ---------- Security primitives ----------

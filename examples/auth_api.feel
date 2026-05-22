@@ -1,0 +1,109 @@
+-- Auth-protected REST API in Feel — full stack of crypto + db + http + security.
+-- Compile:  feel build auth_api.feel -o auth_api.exe   (15MB binary, no deps)
+-- Run:      feel auth_api.feel        (interpreter mode)
+--
+-- Endpoints:
+--   POST /api/register   { username, password }       -> user + token
+--   POST /api/login      { username, password }       -> token
+--   GET  /api/me         (Authorization: Bearer ...)  -> current user
+--   POST /api/admin/ban  (Authorization, role=admin)  -> protected
+
+let db_path = "D:/feel/examples/auth.db"
+let conn = db.connect(db_path)
+db.exec(conn, "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password_hash TEXT, role TEXT DEFAULT 'user')")
+
+-- Read JWT secret from env (FEEL_JWT_SECRET). In a real deployment, this is
+-- a high-entropy value stored in a secrets manager — never hardcoded.
+let jwt_secret = "demo-secret-replace-me-with-env-var"
+
+security.set_audit_log("D:/feel/examples/auth.audit.log")
+security.kill_switch(conn)
+
+-- ============ Helpers ============
+
+define extract_token taking req ->
+  do {
+    let auth = map.get(req.headers, "authorization", "")
+    when string.starts_with(auth, "Bearer ") -> string.slice(auth, 7)
+    otherwise -> nothing
+  }
+
+define current_user taking req ->
+  do {
+    let token = extract_token(req)
+    when token == nothing -> nothing
+    otherwise -> crypto.jwt_verify(token, jwt_secret)
+  }
+
+-- ============ Routes ============
+
+route POST "/api/register" -> do {
+  let username = body.username
+  let password = body.password
+  when username == nothing or password == nothing ->
+    respond 400 map { error: "username and password required" }
+  otherwise -> do {
+    let existing = db.query_one(conn, "SELECT id FROM users WHERE username = ?", [username])
+    when existing != nothing -> respond 409 map { error: "username taken" }
+    otherwise -> do {
+      let hashed = crypto.hash_password(password)
+      db.exec(conn, "INSERT INTO users (username, password_hash) VALUES (?, ?)", [username, hashed])
+      let user_id = db.last_id(conn)
+      let token = crypto.jwt_sign(map { sub: user_id, username: username, role: "user" }, jwt_secret)
+      security.audit(map { type: "USER_REGISTERED", user_id: user_id, username: username })
+      respond 201 map { user_id: user_id, username: username, token: token }
+    }
+  }
+}
+
+route POST "/api/login" -> do {
+  let username = body.username
+  let password = body.password
+  when username == nothing or password == nothing ->
+    respond 400 map { error: "username and password required" }
+  otherwise -> do {
+    let row = db.query_one(conn, "SELECT id, username, password_hash, role FROM users WHERE username = ?", [username])
+
+    -- Constant-time-ish: verify_password is always called even if user missing,
+    -- using a dummy hash so timing doesn't reveal existence.
+    let stored_hash = when row == nothing
+      -> "pbkdf2_sha256$100000$00000000000000000000000000000000$00000000000000000000000000000000000000000000"
+      otherwise -> row.password_hash
+
+    let valid = crypto.verify_password(password, stored_hash) and row != nothing
+
+    when not valid -> do {
+      let blocked = security.report_failed("login:{username}", 5, 300)
+      security.audit(map { type: "LOGIN_FAIL", username: username, blocked: blocked })
+      when blocked -> do {
+        security.panic("brute force on login:{username}")
+        respond 503 map { error: "panic" }
+      }
+      otherwise -> respond 401 map { error: "invalid credentials" }
+    }
+    otherwise -> do {
+      let token = crypto.jwt_sign(map { sub: row.id, username: row.username, role: row.role }, jwt_secret)
+      security.audit(map { type: "LOGIN_OK", user_id: row.id, username: row.username })
+      respond map { user_id: row.id, username: row.username, role: row.role, token: token }
+    }
+  }
+}
+
+route GET "/api/me" -> do {
+  let user = current_user(request)
+  when user == nothing -> respond 401 map { error: "unauthorized" }
+  otherwise -> respond map { user_id: user.sub, username: user.username, role: user.role }
+}
+
+route POST "/api/admin/ban" -> do {
+  let user = current_user(request)
+  when user == nothing -> respond 401 map { error: "unauthorized" }
+  otherwise -> when user.role != "admin" -> respond 403 map { error: "forbidden — admin only" }
+  otherwise -> do {
+    security.audit(map { type: "ADMIN_BAN", admin: user.username, target: body.user_id })
+    respond map { ok: true, banned_user_id: body.user_id }
+  }
+}
+
+show -> "[auth-api] ready at http://localhost:3000  (db: {db_path})"
+serve on 3000 cors
