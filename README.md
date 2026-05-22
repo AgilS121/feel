@@ -5,20 +5,27 @@ First-class AI primitives. REST API as a keyword. Strict canonical syntax so AI 
 
 Compiles to standalone Go binaries (M4 target — currently Python-hosted).
 
-> **Status:** v0.4-m3 · experimental · 63/63 tests pass
+> **Status:** v0.4.1 · experimental · 63/63 tests pass · canonical formatter · Go-transpile preview · polished CLI
 
 ---
 
 ## Try in 30 Seconds
 
 ```bash
-git clone <repo> feel && cd feel
-python main.py examples/hello_api.feel
+git clone https://github.com/AgilS121/feel feel && cd feel
+
+# Make 'feel' a command (one-time setup, PowerShell)
+[Environment]::SetEnvironmentVariable("Path", $env:Path + ";$PWD", "User")
+# Re-open the shell, then:
+
+feel examples/hello_api.feel
 # Then in another terminal:
 curl http://localhost:3000/hello
 ```
 
 You should see `{"message": "Hello, Feel!"}`.
+
+For other shells: use `D:\feel\feel.bat` (cmd), `D:\feel\feel.ps1` (PowerShell), or `./feel` (bash) — see *Commands* section.
 
 ---
 
@@ -159,24 +166,40 @@ route GET "/users/{id}" -> do {
 | `examples/crud_db.feel` | Full CRUD REST + SQLite + AI + agent (M3 flagship) |
 | `examples/crud_todos.feel` | File-backed CRUD (no HTTP) |
 | `examples/word_count.feel` | File IO + JSON + fold |
-| `hello.feel` | Language sampler (printed by the README quick start) |
+| `examples/m4_*.feel` | Programs that compile to native via `feel build` |
+| `hello.feel` | Language sampler |
+
+### Full-Stack Sample
+
+For a working full-stack project (React frontend + Feel REST API + SQLite + AI classify), see [`D:\project-feel`](../project-feel/) — separate repository structure showing how to use Feel as the backend for a real web app.
 
 ---
 
 ## Commands
 
 ```bash
-python main.py                       # REPL (multi-line, history)
-python main.py hello.feel            # run a script
-python main.py examples/hello_api.feel
-python main.py test tests            # run *_test.feel under tests/
-python tests/route_e2e_test.py       # Python e2e tests
-python main.py --compile hello.feel  # experimental Feel → C → native binary
+feel                            # REPL (multi-line, history, .help/.clear/.exit)
+feel hello.feel                 # run a script (alias for: feel run hello.feel)
+feel run examples/hello_api.feel
+feel test tests                 # run *_test.feel under tests/
+feel fmt FILE                   # print canonical form
+feel fmt --write FILE           # rewrite in place
+feel fmt --check FILE [...]     # CI lint mode — exit 1 if any file is not canonical
+feel build FILE                 # transpile Feel → Go → native binary (M4-A scope)
+feel build FILE -o name         # named output
+feel build FILE --keep-go       # save the intermediate .go file
+feel version                    # print version
+feel help                       # full help with grouped commands
 ```
+
+The `feel` command is provided by `feel.bat` (cmd), `feel.ps1` (PowerShell), or `feel` (bash) in this repo. Add the repo directory to `PATH` to use it from anywhere.
 
 ### Requirements
 
-Python 3.7+. **No external Python dependencies**. (Optional: `gcc`/`clang` for `--compile`.)
+- Python 3.7+. **No external Python dependencies.**
+- Optional: Go 1.18+ for `feel build` (Feel → Go transpile).
+- Optional: `gcc`/`clang` for `feel --compile` (legacy C-codegen path).
+- Optional: `ANTHROPIC_API_KEY` env var for real Claude on `ai.*` (otherwise deterministic mock).
 
 ---
 
@@ -226,9 +249,11 @@ feel/
 | M0 | Lexer / parser / interpreter foundation | ✅ |
 | M1 | Error reporting, try/catch, map, modules, stdlib | ✅ `v0.2-m1` |
 | M2 | Block, lambda, HTTP, REST keywords, AI primitives | ✅ `v0.3-m2` |
-| **M3** | `tool` & `agent` keywords, tool-use loop, SQLite | ✅ **`v0.4-m3`** |
-| M3+ | query DSL, `feelfmt`, LSP basics | ⏳ |
-| M4 | Feel → Go transpiler; drop Python at user runtime | 2027 |
+| M3 | `tool` & `agent` keywords, tool-use loop, SQLite | ✅ `v0.4-m3` |
+| M3.5 | `feelfmt` canonical formatter + polished CLI | ✅ `v0.4.1` |
+| **M4-A** | Feel → Go transpiler (preview: literals/let/define/lambda/when/list/map) | ✅ **`v0.4.1`** |
+| M4-B | try/catch, records, modules, full stdlib in Go | ⏳ |
+| M4-C | HTTP + AI + DB in Go (REST apps as standalone binaries) | ⏳ |
 | M5 | Self-host compiler (Feel compiler written in Feel) | 2027 |
 | M6 | LSP, package manager, ecosystem | 2028 |
 | **v1.0** | Standalone Feel toolchain | **2028** |
