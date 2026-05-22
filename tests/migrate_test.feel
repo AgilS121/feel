@@ -1,0 +1,37 @@
+-- Migration: apply pending files, idempotent on second run.
+-- Fixture files live at tests/_tmp_migrations/00X_*.feel
+
+let db_path = "tests/_tmp_migrate.db"
+let mig_dir = "tests/_tmp_migrations"
+
+-- Clean slate
+when file.exists(db_path) -> file.delete(db_path) otherwise -> nothing
+
+-- First run → both fixture migrations applied
+let r1 = migrate.apply(db_path, mig_dir)
+assert length(r1.applied) == 2, "two migrations applied"
+assert r1.failed == nothing, "no failures"
+
+-- Verify schema works
+let conn = db.connect(db_path)
+db.exec(conn, "INSERT INTO users (name, email) VALUES (?, ?)", ["Budi", "b@x.com"])
+let u = db.query_one(conn, "SELECT name, email FROM users")
+assert u.name == "Budi", "users.name"
+assert u.email == "b@x.com", "users.email"
+db.close(conn)
+
+-- Second run → both skipped (idempotent)
+let r2 = migrate.apply(db_path, mig_dir)
+assert length(r2.applied) == 0, "nothing to apply on second run"
+assert length(r2.skipped) == 2, "both skipped"
+
+-- Status shows both as applied
+let st = migrate.status(db_path, mig_dir)
+assert length(st) == 2, "2 migrations total"
+assert st[0].applied == true, "first applied"
+assert st[1].applied == true, "second applied"
+
+-- Cleanup db (keep fixture files for re-runs)
+file.delete(db_path)
+
+show -> "migrate_test OK"

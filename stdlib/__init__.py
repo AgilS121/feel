@@ -12,6 +12,7 @@ from . import db_mod
 from . import security_mod
 from . import crypto_mod
 from . import validate_mod
+from . import migrate_mod
 
 
 def install_into(env):
@@ -31,6 +32,7 @@ def install_into(env):
         ('security', security_mod.EXPORTS),
         ('crypto', crypto_mod.EXPORTS),
         ('validate', validate_mod.EXPORTS),
+        ('migrate', migrate_mod.EXPORTS),
     ]:
         mod_env = Environment()
         for n, fn in mod_funcs.items():
