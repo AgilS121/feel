@@ -1,0 +1,27 @@
+-- M4-A feature showcase: define, pipeline, lambda, list, for, when
+
+define shout taking text -> uppercase(text)
+define double taking x -> x * 2
+
+-- Pipeline
+let msg = "feel"
+show -> shout(msg)
+
+-- Lambda + builtin
+let triple = fn x -> x * 3
+show -> triple(7)
+
+-- List + for loop
+let fruits = ["apel", "mangga", "jeruk"]
+for f in fruits -> show -> f
+
+-- Arithmetic via define
+show -> double(21)
+
+-- Repeat
+repeat 3 times -> show -> "feel!"
+
+-- Conditional expression
+let x = 15
+let kind = when x > 10 -> "big" otherwise -> "small"
+show -> kind

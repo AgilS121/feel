@@ -1,0 +1,21 @@
+-- Map + indexing + pipeline + lambda
+let user = map { name: "Budi", age: 25, city: "Jakarta" }
+show -> user["name"]
+show -> user["age"]
+
+-- Field access on map
+show -> user.city
+
+-- Pipeline with builtin chain
+let result = "hello world" | uppercase | reverse
+show -> result
+
+-- Lambda with closure
+let factor = 10
+let scale = fn x -> x * factor
+show -> scale(7)
+
+-- Conditional + arithmetic
+let score = 85
+let grade = when score >= 80 -> "A" otherwise -> when score >= 60 -> "B" otherwise -> "C"
+show -> grade

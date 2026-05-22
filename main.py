@@ -32,9 +32,10 @@ USAGE = """Usage:
   python main.py fmt FILE                     print canonical formatted source
   python main.py fmt --write FILE             rewrite FILE in canonical form
   python main.py fmt --check FILE [FILE...]   exit 1 if any file is not formatted
-  python main.py --compile file.feel          compile to a binary
-  python main.py --compile file.feel -o name  compile to a binary with given name
-  python main.py --compile file.feel --keep-c keep the intermediate .c file
+  python main.py build file.feel              transpile to Go and build native binary (M4)
+  python main.py build file.feel -o NAME      build with given output name
+  python main.py build file.feel --keep-go    keep the intermediate .go file
+  python main.py --compile file.feel          (legacy) compile to a binary via C
 """
 
 
@@ -156,6 +157,46 @@ def run_tests(tests_dir='tests'):
     return 0 if failed == 0 else 1
 
 
+def run_build(args):
+    """Implements `feel build` — transpile Feel → Go → native binary."""
+    from compile_go import build_feel
+
+    feel_path = None
+    out_path = None
+    keep_go = False
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == '-o' and i + 1 < len(args):
+            out_path = args[i + 1]; i += 2; continue
+        if a == '--keep-go':
+            keep_go = True; i += 1; continue
+        if a.startswith('-'):
+            print(f"build: unknown flag {a!r}")
+            return 1
+        if feel_path is None:
+            feel_path = a
+        i += 1
+
+    if feel_path is None:
+        print("build: missing input .feel file")
+        return 1
+    if not os.path.exists(feel_path):
+        print(f"build: file not found: {feel_path}")
+        return 1
+
+    try:
+        ok, msg = build_feel(feel_path, out_path=out_path, keep_go=keep_go)
+    except FeelError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    if not ok:
+        print(msg, file=sys.stderr)
+        return 1
+    print(msg)
+    return 0
+
+
 def run_fmt(args):
     """Implements `feel fmt`. Returns exit code."""
     from formatter import format_file, format_source
@@ -228,6 +269,9 @@ def main():
 
     if args[0] == 'fmt':
         sys.exit(run_fmt(args[1:]))
+
+    if args[0] == 'build':
+        sys.exit(run_build(args[1:]))
 
     if args[0] in ('-h', '--help', 'help'):
         print(USAGE)

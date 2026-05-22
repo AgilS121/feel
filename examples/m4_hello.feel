@@ -1,0 +1,10 @@
+-- M4-A smoke test: minimal arithmetic + interpolation + show
+let name = "Feel"
+let n = 42
+show -> "Hello from {name}!"
+show -> "n = {n}, n * 2 = {n * 2}"
+
+let total = 10 + 20 + 12
+show -> total
+
+when total > 30 -> show -> "above thirty" otherwise -> show -> "below thirty"
