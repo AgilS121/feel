@@ -29,9 +29,7 @@ show -> "Found id {target}: {found.title}"
 
 -- UPDATE: lambda + map
 let target_update = 1
-let updated = list.map(load(), fn t ->
-  when t.id == target_update -> map.set(t, "done", true)
-  otherwise -> t)
+let updated = list.map(load(), fn t -> when t.id == target_update -> map.set(t, "done", true) otherwise -> t)
 save(updated)
 
 show -> "=== After UPDATE id={target_update} ==="

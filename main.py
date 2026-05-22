@@ -29,6 +29,9 @@ USAGE = """Usage:
   python main.py                              interactive REPL
   python main.py file.feel                    run a file
   python main.py test [tests_dir]             run the test suite
+  python main.py fmt FILE                     print canonical formatted source
+  python main.py fmt --write FILE             rewrite FILE in canonical form
+  python main.py fmt --check FILE [FILE...]   exit 1 if any file is not formatted
   python main.py --compile file.feel          compile to a binary
   python main.py --compile file.feel -o name  compile to a binary with given name
   python main.py --compile file.feel --keep-c keep the intermediate .c file
@@ -153,6 +156,65 @@ def run_tests(tests_dir='tests'):
     return 0 if failed == 0 else 1
 
 
+def run_fmt(args):
+    """Implements `feel fmt`. Returns exit code."""
+    from formatter import format_file, format_source
+
+    write = False
+    check = False
+    files = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == '--write' or a == '-w':
+            write = True
+        elif a == '--check':
+            check = True
+        elif a.startswith('-'):
+            print(f"fmt: unknown flag {a!r}")
+            return 1
+        else:
+            files.append(a)
+        i += 1
+
+    if not files:
+        # Read stdin, print to stdout
+        src = sys.stdin.read()
+        try:
+            print(format_source(src), end='')
+        except FeelError as e:
+            print(str(e), file=sys.stderr)
+            return 1
+        return 0
+
+    not_formatted = []
+    for f in files:
+        if not os.path.exists(f):
+            print(f"fmt: file not found: {f}", file=sys.stderr)
+            return 1
+        try:
+            if check:
+                ok, _ = format_file(f, check=True)
+                if not ok:
+                    not_formatted.append(f)
+            elif write:
+                format_file(f, write=True)
+            else:
+                _, out = format_file(f)
+                print(out, end='')
+        except FeelError as e:
+            print(f"fmt: {f}: {e}", file=sys.stderr)
+            return 1
+
+    if check:
+        if not_formatted:
+            for f in not_formatted:
+                print(f"fmt: not formatted: {f}", file=sys.stderr)
+            return 1
+        return 0
+    return 0
+
+
 def main():
     args = sys.argv[1:]
 
@@ -163,6 +225,9 @@ def main():
     if args[0] == 'test':
         tests_dir = args[1] if len(args) > 1 else 'tests'
         sys.exit(run_tests(tests_dir))
+
+    if args[0] == 'fmt':
+        sys.exit(run_fmt(args[1:]))
 
     if args[0] in ('-h', '--help', 'help'):
         print(USAGE)

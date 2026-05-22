@@ -10,9 +10,9 @@ assert uppercase("feel") == "FEEL", "uppercase"
 assert length("hello") == 5, "length"
 
 -- Tes boolean & comparison
-assert (5 > 3) == true, "gt"
-assert (5 < 3) == false, "lt"
-assert (1 == 1) and (2 == 2), "and"
+assert 5 > 3 == true, "gt"
+assert 5 < 3 == false, "lt"
+assert 1 == 1 and 2 == 2, "and"
 assert true or false, "or"
 assert not false, "not"
 

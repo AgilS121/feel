@@ -11,47 +11,32 @@
 route GET "/" -> respond map {
   service: "Feel AI demo",
   endpoints: ["/ask", "/summarize", "/classify", "/chat"],
-  provider: ai.provider()
+  provider: ai.provider(),
 }
 
 -- GET /ask?q=...
 route GET "/ask" -> do {
   let q = query.q
-  when q == nothing -> respond 400 map { error: "missing ?q=" }
-  otherwise -> respond map {
-    question: q,
-    answer: ai.ask(q)
-  }
+  when q == nothing -> respond 400 map { error: "missing ?q=" } otherwise -> respond map { question: q, answer: ai.ask(q) }
 }
 
 -- POST /summarize { text }
 route POST "/summarize" -> do {
   let text = body.text
-  when text == nothing -> respond 400 map { error: "missing 'text' in body" }
-  otherwise -> respond map {
-    original_length: length(text),
-    summary: ai.summarize(text)
-  }
+  when text == nothing -> respond 400 map { error: "missing 'text' in body" } otherwise -> respond map { original_length: length(text), summary: ai.summarize(text) }
 }
 
 -- POST /classify { text }
 route POST "/classify" -> do {
   let text = body.text
   let categories = ["bug", "feature", "question", "other"]
-  when text == nothing -> respond 400 map { error: "missing 'text' in body" }
-  otherwise -> respond map {
-    text: text,
-    label: ai.classify(text, categories)
-  }
+  when text == nothing -> respond 400 map { error: "missing 'text' in body" } otherwise -> respond map { text: text, label: ai.classify(text, categories) }
 }
 
 -- POST /chat { messages: [{ role, content }, ...] }
 route POST "/chat" -> do {
   let msgs = body.messages
-  when msgs == nothing -> respond 400 map { error: "missing 'messages' list" }
-  otherwise -> respond map {
-    reply: ai.chat(msgs)
-  }
+  when msgs == nothing -> respond 400 map { error: "missing 'messages' list" } otherwise -> respond map { reply: ai.chat(msgs) }
 }
 
 serve on 3000

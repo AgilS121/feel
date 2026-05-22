@@ -15,8 +15,8 @@ assert add_numbers.parameters == ["a", "b"], "tool.parameters"
 
 -- agent: declarative
 agent helper {
-  system: "You are a helpful assistant"
-  tools: [add_numbers, greet]
+  system: "You are a helpful assistant",
+  tools: [add_numbers, greet],
 }
 
 assert helper.name == "helper", "agent.name"
@@ -30,9 +30,7 @@ assert string.starts_with(reply, "[mock-agent]"), "agent.chat returns mock-agent
 assert contains(reply, "2 tools"), "mock-agent reports tool count"
 
 -- agent with minimal config (system only)
-agent simple {
-  system: "Be concise"
-}
+agent simple { system: "Be concise" }
 assert simple.system == "Be concise", "minimal agent"
 assert length(simple.tools) == 0, "no tools default"
 

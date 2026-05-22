@@ -3,7 +3,7 @@ let r1 = try throw "oops" catch err -> "caught: {err}"
 assert r1 == "caught: oops", "basic throw/catch"
 
 -- Tes nested try
-let r2 = try (try throw "inner" catch e -> throw "outer:{e}") catch x -> x
+let r2 = try try throw "inner" catch e -> throw "outer:{e}" catch x -> x
 assert r2 == "outer:inner", "nested try"
 
 -- Tes no throw → body value

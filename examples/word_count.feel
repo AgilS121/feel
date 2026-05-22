@@ -3,8 +3,7 @@
 
 let path = "examples/sample.txt"
 
-let content = try file.read(path) catch err ->
-  throw "Failed to read {path}: {err}"
+let content = try file.read(path) catch err -> throw "Failed to read {path}: {err}"
 
 -- Tokenize: lowercase → split words
 let words = content | lowercase | string.words
@@ -12,11 +11,9 @@ let words = content | lowercase | string.words
 show -> "Total words: {length(words)}"
 
 -- Count frequency via fold
-define inc_word taking acc, w ->
-  when map.has(acc, w) -> map.set(acc, w, map.get(acc, w) + 1)
-  otherwise -> map.set(acc, w, 1)
+define inc_word taking acc, w -> when map.has(acc, w) -> map.set(acc, w, map.get(acc, w) + 1) otherwise -> map.set(acc, w, 1)
 
-let freq = list.fold(words, map { }, inc_word)
+let freq = list.fold(words, map {}, inc_word)
 
 show -> "Unique words: {map.size(freq)}"
 

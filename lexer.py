@@ -50,7 +50,10 @@ class Token:
         return f'Token({self.type}, {self.value!r}, {self.line}:{self.col})'
 
 
-def tokenize(source, filename='<input>'):
+def tokenize(source, filename='<input>', keep_trivia=False):
+    """Tokenize source. By default drops comments and most whitespace.
+    keep_trivia=True keeps COMMENT and NEWLINE tokens for tools like feelfmt.
+    """
     from errors import FeelError
     tokens = []
     line = 1
@@ -59,7 +62,11 @@ def tokenize(source, filename='<input>'):
         kind = m.lastgroup
         value = m.group()
         col = m.start() - line_start + 1
-        if kind == 'SKIP' or kind == 'COMMENT':
+        if kind == 'SKIP':
+            continue
+        if kind == 'COMMENT':
+            if keep_trivia:
+                tokens.append(Token('COMMENT', value, line, col, m.start()))
             continue
         if kind == 'NEWLINE':
             tokens.append(Token('NEWLINE', '\n', line, col, m.start()))

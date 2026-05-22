@@ -15,8 +15,7 @@ define shout taking text -> uppercase(text)
 "feel language" | shout | show
 
 -- Kondisi
-when age > 18 -> show -> "Dewasa"
-otherwise -> show -> "Belum dewasa"
+when age > 18 -> show -> "Dewasa" otherwise -> show -> "Belum dewasa"
 
 -- Loop
 repeat 3 times -> show -> "Feel!"
@@ -26,10 +25,7 @@ let fruits = ["apel", "mangga", "jeruk"]
 for item in fruits -> show -> item
 
 -- Record
-record Person {
-  name: text
-  age: number
-}
+record Person { name: text, age: number }
 
 let budi = Person { name: "Budi", age: 25 }
 show -> budi.name

@@ -17,12 +17,11 @@ let conn = db.connect(db_path)
 db.exec(conn, "CREATE TABLE IF NOT EXISTS todos (id INTEGER PRIMARY KEY, title TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0)")
 
 -- Tools for the AI agent
-tool categorize_todo "Categorize a todo title into one of: work, personal, errand, other" taking title ->
-  ai.classify(title, ["work", "personal", "errand", "other"])
+tool categorize_todo "Categorize a todo title into one of: work, personal, errand, other" taking title -> ai.classify(title, ["work", "personal", "errand", "other"])
 
 agent assistant {
-  system: "You are a productivity assistant. Use the categorize_todo tool when asked to classify a task."
-  tools: [categorize_todo]
+  system: "You are a productivity assistant. Use the categorize_todo tool when asked to classify a task.",
+  tools: [categorize_todo],
 }
 
 -- GET /todos — list all
@@ -31,15 +30,13 @@ route GET "/todos" -> respond db.query(conn, "SELECT id, title, done FROM todos 
 -- GET /todos/{id} — find one
 route GET "/todos/{id}" -> do {
   let row = db.query_one(conn, "SELECT id, title, done FROM todos WHERE id = ?", [number(id)])
-  when row == nothing -> respond 404 map { error: "todo not found", id: id }
-  otherwise -> respond row
+  when row == nothing -> respond 404 map { error: "todo not found", id: id } otherwise -> respond row
 }
 
 -- POST /todos — create
 route POST "/todos" -> do {
   let title = body.title
-  when title == nothing -> respond 400 map { error: "missing 'title' in body" }
-  otherwise -> do {
+  when title == nothing -> respond 400 map { error: "missing 'title' in body" } otherwise -> do {
     db.exec(conn, "INSERT INTO todos (title) VALUES (?)", [title])
     let new_id = db.last_id(conn)
     let new_todo = db.query_one(conn, "SELECT id, title, done FROM todos WHERE id = ?", [new_id])
@@ -50,31 +47,26 @@ route POST "/todos" -> do {
 -- PATCH /todos/{id}/done — mark done
 route PATCH "/todos/{id}/done" -> do {
   let affected = db.exec(conn, "UPDATE todos SET done = 1 WHERE id = ?", [number(id)])
-  when affected == 0 -> respond 404 map { error: "todo not found" }
-  otherwise -> respond 204
+  when affected == 0 -> respond 404 map { error: "todo not found" } otherwise -> respond 204
 }
 
 -- DELETE /todos/{id}
 route DELETE "/todos/{id}" -> do {
   let affected = db.exec(conn, "DELETE FROM todos WHERE id = ?", [number(id)])
-  when affected == 0 -> respond 404 map { error: "todo not found" }
-  otherwise -> respond 204
+  when affected == 0 -> respond 404 map { error: "todo not found" } otherwise -> respond 204
 }
 
 -- POST /todos/{id}/classify — AI categorize the title
 route POST "/todos/{id}/classify" -> do {
   let row = db.query_one(conn, "SELECT title FROM todos WHERE id = ?", [number(id)])
-  when row == nothing -> respond 404 map { error: "todo not found" }
-  otherwise -> respond map {
+  when row == nothing -> respond 404 map { error: "todo not found" } otherwise -> respond map {
     title: row.title,
-    category: ai.classify(row.title, ["work", "personal", "errand", "other"])
+    category: ai.classify(row.title, ["work", "personal", "errand", "other"]),
   }
 }
 
 -- POST /chat — talk to the assistant agent (which can use tools)
-route POST "/chat" -> respond map {
-  reply: assistant.chat(body.message)
-}
+route POST "/chat" -> respond map { reply: assistant.chat(body.message) }
 
 show -> "ready: http://localhost:3000  (db: {db_path})"
 serve on 3000

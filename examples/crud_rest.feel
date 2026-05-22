@@ -17,9 +17,7 @@ when not file.exists(db_path) -> file.write(db_path, "[]") otherwise -> nothing
 
 define load -> json.decode(file.read(db_path))
 define save taking xs -> file.write(db_path, json.encode(xs, true))
-define next_id taking xs ->
-  when length(xs) == 0 -> 1
-  otherwise -> last(list.sort(list.map(xs, fn t -> t.id))) + 1
+define next_id taking xs -> when length(xs) == 0 -> 1 otherwise -> last(list.sort(list.map(xs, fn t -> t.id))) + 1
 
 -- GET /todos — list all
 route GET "/todos" -> respond load()
@@ -28,15 +26,13 @@ route GET "/todos" -> respond load()
 route GET "/todos/{id}" -> do {
   let target = number(id)
   let found = first(list.filter(load(), fn t -> t.id == target))
-  when found == nothing -> respond 404 map { error: "todo not found", id: target }
-  otherwise -> respond found
+  when found == nothing -> respond 404 map { error: "todo not found", id: target } otherwise -> respond found
 }
 
 -- POST /todos — create from { title }
 route POST "/todos" -> do {
   let title = body.title
-  when title == nothing -> respond 400 map { error: "missing 'title' in body" }
-  otherwise -> do {
+  when title == nothing -> respond 400 map { error: "missing 'title' in body" } otherwise -> do {
     let todos = load()
     let new_todo = map { id: next_id(todos), title: title, done: false }
     save(push(todos, new_todo))
@@ -47,9 +43,7 @@ route POST "/todos" -> do {
 -- PATCH /todos/{id}/done — mark done
 route PATCH "/todos/{id}/done" -> do {
   let target = number(id)
-  let updated = list.map(load(), fn t ->
-    when t.id == target -> map.set(t, "done", true)
-    otherwise -> t)
+  let updated = list.map(load(), fn t -> when t.id == target -> map.set(t, "done", true) otherwise -> t)
   save(updated)
   respond 204
 }
@@ -66,10 +60,9 @@ route DELETE "/todos/{id}" -> do {
 route POST "/todos/{id}/classify" -> do {
   let target = number(id)
   let found = first(list.filter(load(), fn t -> t.id == target))
-  when found == nothing -> respond 404 map { error: "todo not found" }
-  otherwise -> respond map {
+  when found == nothing -> respond 404 map { error: "todo not found" } otherwise -> respond map {
     title: found.title,
-    category: ai.classify(found.title, ["work", "personal", "errand", "other"])
+    category: ai.classify(found.title, ["work", "personal", "errand", "other"]),
   }
 }
 

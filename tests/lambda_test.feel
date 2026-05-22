@@ -28,7 +28,7 @@ assert triple(5) == 15, "closure over outer var"
 let users = [
   map { id: 1, name: "Ana" },
   map { id: 2, name: "Bob" },
-  map { id: 3, name: "Carol" }
+  map { id: 3, name: "Carol" },
 ]
 let target_id = 2
 let found = first(list.filter(users, fn u -> u.id == target_id))
