@@ -1,0 +1,39 @@
+-- mail module — mock provider used in tests
+
+mail.clear_sent()
+assert mail.provider() == "mock", "default provider mock"
+assert length(mail.sent()) == 0, "starts empty"
+
+-- send a message
+let ok = mail.send(map {
+  to: "user@example.com",
+  subject: "Welcome",
+  body: "Hi Budi, thanks for signing up.",
+})
+assert ok == true, "send returns true"
+
+-- inspect sent buffer
+let outbox = mail.sent()
+assert length(outbox) == 1, "one sent"
+assert outbox[0].to == "user@example.com", "to"
+assert outbox[0].subject == "Welcome", "subject"
+assert contains(outbox[0].body, "Budi"), "body contains name"
+
+-- explicit sender overrides default
+mail.send(map {
+  to: "admin@example.com",
+  subject: "Daily Report",
+  body: "All systems nominal",
+  from: "reports@my-app.com",
+})
+let outbox2 = mail.sent()
+assert outbox2[1].from == "reports@my-app.com", "explicit from"
+
+-- missing 'to' throws
+let r = try mail.send(map { subject: "x", body: "y" }) catch err -> err
+assert contains(r, "missing 'to'"), "missing field"
+
+mail.clear_sent()
+assert length(mail.sent()) == 0, "cleared"
+
+show -> "mail_test OK"
