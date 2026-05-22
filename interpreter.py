@@ -8,7 +8,7 @@ from parser import (Program, LetStmt, DefineStmt, RecordDef, ShowStmt,
                     Call, CallExpr, FieldAccess, IndexAccess, RecordLiteral, MapLiteral,
                     ListLiteral, Ident, Literal, ArrowExpr,
                     TryStmt, ThrowStmt, CatchStep, ImportStmt, AssertStmt,
-                    Block, Lambda)
+                    Block, Lambda, RouteDecl, RespondExpr, ServeStmt)
 from errors import FeelError, FeelThrow
 
 
@@ -292,6 +292,15 @@ class Interpreter:
                 self.env.set(node.name, module)
             return module
 
+        if isinstance(node, RouteDecl):
+            self._register_route(node)
+            return None
+
+        if isinstance(node, ServeStmt):
+            from runtime.http import serve
+            serve(port=node.port)
+            return None
+
         if isinstance(node, AssertStmt):
             cond = self.eval_expr(node.cond)
             if not cond:
@@ -494,6 +503,23 @@ class Interpreter:
             # Anonymous function — closure captures current env
             return FeelFunction('<lambda>', node.params, node.body, self.env)
 
+        if isinstance(node, RespondExpr):
+            from runtime.http import FeelResponse
+            body = self.eval_expr(node.body) if node.body is not None else None
+            # Convert FeelRecord to dict for JSON encoding
+            if isinstance(body, FeelRecord):
+                body = dict(body.fields)
+            return FeelResponse(status=node.status, body=body)
+
+        if isinstance(node, RouteDecl):
+            self._register_route(node)
+            return None
+
+        if isinstance(node, ServeStmt):
+            from runtime.http import serve
+            serve(port=node.port)
+            return None
+
         if isinstance(node, ThrowStmt):
             val = self.eval_expr(node.expr)
             raise FeelThrow(val, node=node)
@@ -544,6 +570,33 @@ class Interpreter:
         raise FeelError.type_error(node or Literal(None),
             f"'{feel_str(fn)}' is not callable",
             filename=self.filename, source=self.source)
+
+    def _register_route(self, route_node):
+        """Register a Feel route handler with the global registry."""
+        from runtime.router import global_registry
+        handler_ast = route_node.handler
+        closure_env = self.env
+        filename = self.filename
+        source = self.source
+
+        def py_handler(feel_request):
+            # New scope: parent is closure (top-level defines visible)
+            local = Environment(closure_env)
+            local.set('request', feel_request)
+            local.set('body', feel_request.body)
+            local.set('query', feel_request.query)
+            # Path params auto-bound to local scope
+            for k, v in feel_request.params.items():
+                local.set(k, v)
+            sub = Interpreter.__new__(Interpreter)
+            sub.env = local
+            sub.filename = filename
+            sub.source = source
+            sub.search_paths = self.search_paths
+            sub.record_types = self.record_types
+            return sub.eval_expr(handler_ast)
+
+        global_registry().register(route_node.method, route_node.path, py_handler)
 
     def _load_module(self, import_node):
         name = import_node.name

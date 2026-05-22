@@ -1,0 +1,16 @@
+-- Feel route declarations for integration test.
+-- No `serve on PORT` — Python test starts server manually.
+
+route GET "/hello" -> respond map { message: "Hello, Feel!" }
+
+route GET "/health" -> respond map { ok: true, version: "0.3-m2" }
+
+route GET "/todos/{id}" -> respond map { todo_id: id, title: "Sample" }
+
+route POST "/echo" -> respond body
+
+route GET "/maybe-error" -> throw "intentional"
+
+route GET "/custom-status" -> respond 201 map { created: true }
+
+route GET "/no-content" -> respond 204

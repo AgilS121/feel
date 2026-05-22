@@ -141,6 +141,26 @@ class Lambda(Node):
     def __init__(self, params, body): self.params = params; self.body = body
 
 
+class RouteDecl(Node):
+    """route METHOD "path" -> handler_body."""
+    def __init__(self, method, path, handler):
+        self.method = method
+        self.path = path
+        self.handler = handler
+
+
+class RespondExpr(Node):
+    """respond [STATUS] [BODY] — build response value."""
+    def __init__(self, status, body):
+        self.status = status
+        self.body = body
+
+
+class ServeStmt(Node):
+    """serve on PORT — start HTTP server, blocking."""
+    def __init__(self, port): self.port = port
+
+
 class Ident(Node):
     def __init__(self, name): self.name = name
 
@@ -208,7 +228,17 @@ class Parser:
         'AND', 'OR', 'NOT', 'TRUE', 'FALSE', 'NOTHING',
         'TRY', 'CATCH', 'THROW', 'ERROR', 'MAP',
         'IMPORT', 'FROM', 'EXPOSE', 'ASSERT', 'FN', 'DO',
+        'ROUTE', 'RESPOND', 'SERVE', 'ON', 'EXPECTS',
     }
+
+    # Token types yang bisa mulai sebuah ekspresi (untuk lookahead di respond)
+    _EXPR_STARTERS = {
+        'NUMBER', 'STRING', 'TRUE', 'FALSE', 'NOTHING', 'IDENT',
+        'LPAREN', 'LBRACKET', 'MAP', 'FN', 'DO', 'SHOW', 'WHEN',
+        'TRY', 'THROW', 'MINUS', 'NOT', 'RESPOND',
+    }
+
+    _HTTP_METHODS = {'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'}
 
     def check_snake_case(self, name, token, kind):
         """Enforce snake_case for variables, functions, parameters."""
@@ -271,6 +301,8 @@ class Parser:
         if t.type == 'IMPORT': return self.parse_import()
         if t.type == 'FROM': return self.parse_from_import()
         if t.type == 'ASSERT': return self.parse_assert()
+        if t.type == 'ROUTE': return self.parse_route()
+        if t.type == 'SERVE': return self.parse_serve()
         return self.parse_expr_stmt()
 
     def parse_let(self):
@@ -415,6 +447,41 @@ class Parser:
             else:
                 break
         return _pos(ImportStmt(name, expose=names), t)
+
+    def parse_route(self):
+        t = self.advance()  # route
+        method_tok = self.current()
+        if method_tok is None or method_tok.type not in self._HTTP_METHODS:
+            raise FeelError.syntax(
+                method_tok or t,
+                "'route' must be followed by an HTTP method (GET, POST, PUT, PATCH, DELETE)",
+                hint="example: route GET \"/path\" -> body",
+                filename=self.filename, source=self.source)
+        method = self.advance().value.upper()
+        path_tok = self.expect('STRING', hint="HTTP method must be followed by a path string")
+        path = path_tok.value
+        self.expect('ARROW', hint="route path must be followed by '->' then handler body")
+        handler = self.parse_expr()
+        return _pos(RouteDecl(method, path, handler), t)
+
+    def parse_serve(self):
+        t = self.advance()  # serve
+        self.expect('ON', hint="'serve' must be followed by 'on PORT'")
+        port_tok = self.expect('NUMBER', hint="'on' must be followed by a port number")
+        port = int(port_tok.value)
+        return _pos(ServeStmt(port), t)
+
+    def parse_respond(self):
+        t = self.advance()  # respond
+        status = 200
+        body = None
+        # Optional status (NUMBER literal)
+        if self.current() and self.current().type == 'NUMBER':
+            status = int(self.advance().value)
+        # Optional body (any expression)
+        if self.current() and self.current().type in self._EXPR_STARTERS:
+            body = self.parse_expr()
+        return _pos(RespondExpr(status, body), t)
 
     def parse_assert(self):
         t = self.advance()  # assert
@@ -633,6 +700,9 @@ class Parser:
             self.advance()
             expr = self.parse_expr()
             return _pos(ThrowStmt(expr), t)
+
+        if t.type == 'RESPOND':
+            return self.parse_respond()
 
         if t.type == 'WHEN':
             # 'when COND -> THEN otherwise -> ELSE' sebagai ekspresi
