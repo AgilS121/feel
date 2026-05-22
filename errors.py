@@ -39,7 +39,7 @@ def _get_line(filename, source, line):
 
 def _render(filename, source, line, col, kind, msg, hint=None, length=1):
     src_line = _get_line(filename, source, line)
-    header = _red(_bold(f'Error {kind}')) + f' di {_cyan(filename)}:{_yellow(str(line))}:{_yellow(str(col))}'
+    header = _red(_bold(f'{kind}Error')) + f' at {_cyan(filename)}:{_yellow(str(line))}:{_yellow(str(col))}'
     parts = [header]
     if src_line:
         gutter = _dim(f'  {line:>4} | ')
@@ -47,16 +47,16 @@ def _render(filename, source, line, col, kind, msg, hint=None, length=1):
         caret_indent = ' ' * (len(f'  {line:>4} | ') + max(col - 1, 0))
         caret = _red('^' * max(length, 1))
         parts.append(f'{caret_indent}{caret}')
-    parts.append(_red(f'  Pesan: ') + msg)
+    parts.append(_red(f'  Message: ') + msg)
     if hint:
-        parts.append(_yellow(f'  Saran: ') + hint)
+        parts.append(_yellow(f'  Hint:    ') + hint)
     return '\n'.join(parts)
 
 
 class FeelError(Exception):
     """Error utama Feel — selalu carry posisi sumber."""
 
-    def __init__(self, message, *, filename='<input>', line=1, col=1, hint=None, kind='Sintaks', length=1, source=None):
+    def __init__(self, message, *, filename='<input>', line=1, col=1, hint=None, kind='Syntax', length=1, source=None):
         self.filename = filename
         self.line = line
         self.col = col
@@ -74,16 +74,16 @@ class FeelError(Exception):
         col = getattr(token, 'col', 1)
         length = len(str(getattr(token, 'value', '?'))) if token is not None else 1
         return cls(message, filename=filename, line=line, col=col,
-                   hint=hint, kind='Sintaks', length=length, source=source)
+                   hint=hint, kind='Syntax', length=length, source=source)
 
     @classmethod
     def syntax_at(cls, filename, source, line, col, message, hint=None, length=1):
         return cls(message, filename=filename, line=line, col=col,
-                   hint=hint, kind='Sintaks', length=length, source=source)
+                   hint=hint, kind='Syntax', length=length, source=source)
 
     @classmethod
     def runtime(cls, node, message, hint=None, filename='<input>', source=None):
-        """Bikin error runtime dari AST node (yang sudah punya line/col)."""
+        """Build runtime error from AST node (which already carries line/col)."""
         line = getattr(node, 'line', 1) or 1
         col = getattr(node, 'col', 1) or 1
         return cls(message, filename=filename, line=line, col=col,
@@ -91,19 +91,19 @@ class FeelError(Exception):
 
     @classmethod
     def name_error(cls, node, name, filename='<input>', source=None, similar=None):
-        hint = "cek typo nama variabel/fungsi"
+        hint = "check spelling of variable or function name"
         if similar:
-            hint = f"mungkin maksud kamu {_bold(similar)}?"
+            hint = f"did you mean {_bold(similar)}?"
         elif name:
-            hint = f"cek typo, atau definisikan dulu pakai 'let {name} = ...' atau 'define {name} ...'"
-        return cls.runtime(node, f"'{name}' belum didefinisikan", hint=hint, filename=filename, source=source)
+            hint = f"check spelling, or define it first with 'let {name} = ...' or 'define {name} ...'"
+        return cls.runtime(node, f"'{name}' is not defined", hint=hint, filename=filename, source=source)
 
     @classmethod
     def type_error(cls, node, message, hint=None, filename='<input>', source=None):
         return cls(message, filename=filename,
                    line=getattr(node, 'line', 1) or 1,
                    col=getattr(node, 'col', 1) or 1,
-                   hint=hint, kind='Tipe', length=1, source=source)
+                   hint=hint, kind='Type', length=1, source=source)
 
 
 class FeelThrow(Exception):

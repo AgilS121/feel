@@ -25,13 +25,13 @@ BANNER = """
   Feel v0.2  — code that flows
 """
 
-USAGE = """Penggunaan:
-  python main.py                              REPL interaktif
-  python main.py file.feel                    jalankan file
-  python main.py test [tests_dir]             jalankan test suite
-  python main.py --compile file.feel          compile ke binary
-  python main.py --compile file.feel -o nama  compile ke binary dengan nama
-  python main.py --compile file.feel --keep-c simpan file .c sementara
+USAGE = """Usage:
+  python main.py                              interactive REPL
+  python main.py file.feel                    run a file
+  python main.py test [tests_dir]             run the test suite
+  python main.py --compile file.feel          compile to a binary
+  python main.py --compile file.feel -o name  compile to a binary with given name
+  python main.py --compile file.feel --keep-c keep the intermediate .c file
 """
 
 
@@ -77,7 +77,7 @@ def _needs_continuation(buf):
 
 def repl():
     print(BANNER)
-    print('Ketik kode Feel. Ketik "exit" untuk keluar.\n')
+    print('Type Feel code. Type "exit" to quit.\n')
 
     # readline untuk history
     try:
@@ -113,7 +113,7 @@ def repl():
                 print(f"Uncaught throw: {ft.value}")
             buf = ''
         except KeyboardInterrupt:
-            print('\nDibatalkan')
+            print('\nCancelled')
             buf = ''
             continue
         except EOFError:
@@ -125,11 +125,11 @@ def run_tests(tests_dir='tests'):
     """Jalankan semua *_test.feel di folder tests/."""
     import glob
     if not os.path.isdir(tests_dir):
-        print(f"Folder test tidak ditemukan: {tests_dir}")
+        print(f"Test directory not found: {tests_dir}")
         return 1
     files = sorted(glob.glob(os.path.join(tests_dir, '*_test.feel')))
     if not files:
-        print(f"Tidak ada *_test.feel di {tests_dir}")
+        print(f"No *_test.feel files in {tests_dir}")
         return 1
     passed = 0
     failed = 0
@@ -149,7 +149,7 @@ def run_tests(tests_dir='tests'):
         except Exception as e:
             print(f"  FAIL  {name}  (unexpected: {e})")
             failed += 1
-    print(f"\n{passed} pass, {failed} fail dari {len(files)} test.")
+    print(f"\n{passed} passed, {failed} failed out of {len(files)} tests.")
     return 0 if failed == 0 else 1
 
 
@@ -172,7 +172,7 @@ def main():
         from compiler import compile_file
         args = args[1:]
         if not args:
-            print("Error: --compile butuh file .feel")
+            print("Error: --compile requires a .feel file")
             sys.exit(1)
         feel_path = args[0]
         out_path = None
@@ -186,7 +186,7 @@ def main():
             else:
                 i += 1
         if not os.path.exists(feel_path):
-            print(f"Error: file '{feel_path}' tidak ditemukan")
+            print(f"Error: file '{feel_path}' not found")
             sys.exit(1)
         ok = compile_file(feel_path, out_path=out_path, keep_c=keep_c)
         sys.exit(0 if ok else 1)
@@ -194,7 +194,7 @@ def main():
     # Interpret mode
     path = args[0]
     if not os.path.exists(path):
-        print(f"Error: file '{path}' tidak ditemukan")
+        print(f"Error: file '{path}' not found")
         sys.exit(1)
     try:
         run_file(path)

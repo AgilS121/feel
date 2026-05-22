@@ -1,33 +1,33 @@
--- Smoke test M1: baca file, hitung frekuensi kata, tulis hasil ke JSON.
--- Mendemonstrasikan: file IO, pipeline, string ops, map ops, json, try/catch.
+-- M1 smoke test: read a file, count word frequencies, write the result to JSON.
+-- Demonstrates: file IO, pipeline, string ops, map ops, json, try/catch.
 
 let path = "examples/sample.txt"
 
 let content = try file.read(path) catch err ->
-  throw "Gagal baca {path}: {err}"
+  throw "Failed to read {path}: {err}"
 
 -- Tokenize: lowercase → split words
 let words = content | lowercase | string.words
 
-show -> "Total kata: {length(words)}"
+show -> "Total words: {length(words)}"
 
--- Hitung frekuensi pakai fold
+-- Count frequency via fold
 define inc_word taking acc, w ->
   when map.has(acc, w) -> map.set(acc, w, map.get(acc, w) + 1)
   otherwise -> map.set(acc, w, 1)
 
 let freq = list.fold(words, map { }, inc_word)
 
-show -> "Kata unik: {map.size(freq)}"
+show -> "Unique words: {map.size(freq)}"
 
--- Tulis ke JSON
+-- Write to JSON
 let out_path = "examples/word_count_out.json"
 file.write(out_path, json.encode(freq, true))
-show -> "Hasil tersimpan ke {out_path}"
+show -> "Saved to {out_path}"
 
--- Verifikasi roundtrip
+-- Verify roundtrip
 let verify = json.decode(file.read(out_path))
-assert verify["feel"] == 4, "kata 'feel' muncul 4x"
-assert verify["language"] == 3, "kata 'language' muncul 3x"
-assert verify["is"] == 5, "kata 'is' muncul 5x"
-show -> "Verifikasi OK"
+assert verify["feel"] == 4, "'feel' appears 4 times"
+assert verify["language"] == 3, "'language' appears 3 times"
+assert verify["is"] == 5, "'is' appears 5 times"
+show -> "Verification OK"

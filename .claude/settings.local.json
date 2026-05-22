@@ -19,7 +19,9 @@
       "Bash(python main.py test tests)",
       "Bash(python main.py)",
       "Bash(python main.py examples/word_count.feel)",
-      "Bash(git rm *)"
+      "Bash(git rm *)",
+      "Bash(git tag *)",
+      "Bash(python main.py D:/tmp/err_demo.feel)"
     ]
   }
 }

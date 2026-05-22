@@ -158,11 +158,11 @@ class Parser:
         self.skip_newlines()
         if self.pos >= len(self.tokens):
             last = self.tokens[-1] if self.tokens else None
-            raise FeelError.syntax(last, f"diharapkan {type_}, tapi sudah end of file", hint=hint,
+            raise FeelError.syntax(last, f"expected {type_}, but reached end of file", hint=hint,
                                    filename=self.filename, source=self.source)
         t = self.tokens[self.pos]
         if t.type != type_:
-            raise FeelError.syntax(t, f"diharapkan {type_}, tapi dapat {t.type} ({t.value!r})",
+            raise FeelError.syntax(t, f"expected {type_}, got {t.type} ({t.value!r})",
                                    hint=hint, filename=self.filename, source=self.source)
         self.pos += 1
         return t
@@ -187,11 +187,11 @@ class Parser:
         self.skip_newlines()
         if self.pos >= len(self.tokens):
             last = self.tokens[-1] if self.tokens else None
-            raise FeelError.syntax(last, "diharapkan nama field/method",
+            raise FeelError.syntax(last, "expected field or method name",
                                    hint=hint, filename=self.filename, source=self.source)
         t = self.tokens[self.pos]
         if t.type not in self._NAME_LIKE:
-            raise FeelError.syntax(t, f"diharapkan nama field/method, dapat {t.type}",
+            raise FeelError.syntax(t, f"expected field or method name, got {t.type}",
                                    hint=hint, filename=self.filename, source=self.source)
         self.pos += 1
         return t
@@ -229,14 +229,14 @@ class Parser:
 
     def parse_let(self):
         t = self.advance()  # let
-        name = self.expect('IDENT', hint="setelah 'let' diharapkan nama variabel").value
-        self.expect('ASSIGN', hint="setelah nama variabel diharapkan '='")
+        name = self.expect('IDENT', hint="'let' must be followed by a variable name").value
+        self.expect('ASSIGN', hint="variable name must be followed by '='")
         value = self.parse_expr()
         return _pos(LetStmt(name, value), t)
 
     def parse_define(self):
         t = self.advance()  # define
-        name = self.expect('IDENT', hint="setelah 'define' diharapkan nama fungsi").value
+        name = self.expect('IDENT', hint="'define' must be followed by a function name").value
         params = []
         if self.current() and self.current().type == 'TAKING':
             self.advance()
@@ -246,13 +246,13 @@ class Parser:
                     self.advance()
                 else:
                     break
-        self.expect('ARROW', hint="setelah parameter diharapkan '->' lalu body fungsi")
+        self.expect('ARROW', hint="parameters must be followed by '->' then the function body")
         body = self.parse_expr()
         return _pos(DefineStmt(name, params, body), t)
 
     def parse_record(self):
         t = self.advance()  # record
-        name = self.expect('IDENT', hint="setelah 'record' diharapkan nama record").value
+        name = self.expect('IDENT', hint="'record' must be followed by a record name").value
         self.expect('LBRACE')
         fields = {}
         self.skip_newlines()
@@ -270,14 +270,14 @@ class Parser:
 
     def parse_show(self):
         t = self.advance()  # show
-        self.expect('ARROW', hint="setelah 'show' diharapkan '->'")
+        self.expect('ARROW', hint="'show' must be followed by '->'")
         expr = self.parse_expr()
         return _pos(ShowStmt(expr), t)
 
     def parse_when(self):
         t = self.advance()  # when
         cond = self.parse_comparison()
-        self.expect('ARROW', hint="setelah kondisi 'when' diharapkan '->'")
+        self.expect('ARROW', hint="'when' condition must be followed by '->'")
         then = self.parse_single_expr()
         otherwise = None
         saved = self.pos
@@ -299,7 +299,7 @@ class Parser:
     def parse_repeat(self):
         t = self.advance()  # repeat
         count = self.parse_primary()
-        self.expect('TIMES', hint="setelah jumlah diharapkan 'times'")
+        self.expect('TIMES', hint="count must be followed by 'times'")
         self.expect('ARROW')
         body = self.parse_expr()
         return _pos(RepeatStmt(count, body), t)
@@ -307,7 +307,7 @@ class Parser:
     def parse_for(self):
         t = self.advance()  # for
         var = self.expect('IDENT').value
-        self.expect('IN', hint="setelah nama variabel diharapkan 'in'")
+        self.expect('IN', hint="variable name must be followed by 'in'")
         iterable = self.parse_primary()
         self.expect('ARROW')
         body = self.parse_expr()
@@ -319,8 +319,8 @@ class Parser:
         self.skip_newlines()
         if not (self.current() and self.current().type == 'CATCH'):
             raise FeelError.syntax(self.current() or t,
-                                   "blok 'try' butuh 'catch' setelahnya",
-                                   hint="format: try EXPR catch NAMA -> EXPR",
+                                   "'try' block requires a 'catch' clause",
+                                   hint="syntax: try EXPR catch NAME -> EXPR",
                                    filename=self.filename, source=self.source)
         self.advance()  # catch
         err_name = self.expect('IDENT', hint="setelah 'catch' diharapkan nama variabel error").value
@@ -335,7 +335,7 @@ class Parser:
 
     def parse_import(self):
         t = self.advance()  # import
-        name = self.expect('IDENT', hint="setelah 'import' diharapkan nama modul").value
+        name = self.expect('IDENT', hint="'import' must be followed by a module name").value
         expose = None
         if self.current() and self.current().type == 'EXPOSE':
             self.advance()
@@ -350,8 +350,8 @@ class Parser:
 
     def parse_from_import(self):
         t = self.advance()  # from
-        name = self.expect('IDENT', hint="setelah 'from' diharapkan nama modul").value
-        self.expect('IMPORT', hint="setelah nama modul diharapkan 'import'")
+        name = self.expect('IDENT', hint="'from' must be followed by a module name").value
+        self.expect('IMPORT', hint="module name must be followed by 'import'")
         names = []
         while self.current() and self.current().type == 'IDENT':
             names.append(self.advance().value)
@@ -383,7 +383,7 @@ class Parser:
                 # special-case: '| catch -> expr'
                 if self.current() and self.current().type == 'CATCH':
                     ct = self.advance()
-                    self.expect('ARROW', hint="setelah 'catch' di pipeline diharapkan '-> nilai_default'")
+                    self.expect('ARROW', hint="'catch' in a pipeline must be followed by '-> default_value'")
                     handler = self.parse_call_or_ident()
                     steps.append(_pos(CatchStep(handler), ct))
                 else:
@@ -446,12 +446,12 @@ class Parser:
             t = self.current()
             if t.type == 'DOT':
                 self.advance()
-                field = self.expect_name(hint="setelah '.' diharapkan nama field").value
+                field = self.expect_name(hint="'.' must be followed by a field name").value
                 expr = _pos(FieldAccess(expr, field), t)
             elif t.type == 'LBRACKET':
                 self.advance()
                 index = self.parse_expr()
-                self.expect('RBRACKET', hint="diharapkan ']' penutup")
+                self.expect('RBRACKET', hint="expected closing ']'")
                 expr = _pos(IndexAccess(expr, index), t)
             else:  # LPAREN
                 self.advance()
@@ -460,7 +460,7 @@ class Parser:
                     args.append(self.parse_expr())
                     if self.current() and self.current().type == 'COMMA':
                         self.advance()
-                self.expect('RPAREN', hint="diharapkan ')' penutup pemanggilan fungsi")
+                self.expect('RPAREN', hint="expected closing ')' for function call")
                 expr = _pos(CallExpr(expr, args), t)
         return expr
 
@@ -477,8 +477,8 @@ class Parser:
         t = self.current()
         if t is None:
             last = self.tokens[-1] if self.tokens else None
-            raise FeelError.syntax(last, "ekspresi terpotong di akhir file",
-                                   hint="lengkapi ekspresi atau hapus sisa kode yang menggantung",
+            raise FeelError.syntax(last, "expression truncated at end of file",
+                                   hint="complete the expression or remove trailing code",
                                    filename=self.filename, source=self.source)
 
         if t.type == 'NUMBER':
@@ -513,7 +513,7 @@ class Parser:
                 self.advance()
                 return _pos(Ident('map'), t)
             self.advance()
-            self.expect('LBRACE', hint="setelah 'map' diharapkan '{ key: value, ... }'")
+            self.expect('LBRACE', hint="'map' must be followed by '{ key: value, ... }'")
             entries = []
             self.skip_newlines()
             while self.current() and self.current().type != 'RBRACE':
@@ -528,7 +528,7 @@ class Parser:
                 else:
                     raise FeelError.syntax(k_tok, "key map harus identifier atau string",
                                            filename=self.filename, source=self.source)
-                self.expect('COLON', hint="setelah key map diharapkan ':'")
+                self.expect('COLON', hint="map key must be followed by ':'")
                 v = self.parse_expr()
                 entries.append((key_node, v))
                 self.skip_newlines()
@@ -594,7 +594,7 @@ class Parser:
                                        hint="format: try EXPR catch NAMA -> EXPR",
                                        filename=self.filename, source=self.source)
             self.advance()  # catch
-            err_name = self.expect('IDENT', hint="setelah 'catch' diharapkan nama variabel error").value
+            err_name = self.expect('IDENT', hint="'catch' must be followed by an error variable name").value
             self.expect('ARROW')
             handler = self.parse_expr()
             return _pos(TryStmt(body, err_name, handler), t_try)
@@ -627,8 +627,8 @@ class Parser:
                 return self.parse_record_literal(name_tok)
             return _pos(Ident(name), name_tok)
 
-        raise FeelError.syntax(t, f"token tidak diharapkan: {t.type} ({t.value!r})",
-                               hint="cek apakah ada syntax yang hilang sebelumnya",
+        raise FeelError.syntax(t, f"unexpected token: {t.type} ({t.value!r})",
+                               hint="check for missing syntax before this point",
                                filename=self.filename, source=self.source)
 
     def parse_record_literal(self, name_tok):

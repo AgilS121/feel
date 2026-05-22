@@ -69,8 +69,8 @@ def tokenize(source, filename='<input>'):
         if kind == 'MISMATCH':
             raise FeelError.syntax_at(
                 filename, source, line, col,
-                f"karakter tidak dikenali: {value!r}",
-                hint="cek apakah karakter ini seharusnya ada di Feel."
+                f"unexpected character: {value!r}",
+                hint="this character is not part of Feel syntax"
             )
         if kind == 'NUMBER':
             value = float(value) if '.' in value else int(value)

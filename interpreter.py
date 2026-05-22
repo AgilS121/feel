@@ -223,7 +223,7 @@ class Interpreter:
         if isinstance(node, RepeatStmt):
             count = self.eval_expr(node.count)
             if not isinstance(count, (int, float)):
-                raise FeelError.type_error(node, f"'repeat' butuh angka, dapat {_type_of(count)}",
+                raise FeelError.type_error(node, f"'repeat' expects a number, got {_type_of(count)}",
                                            filename=self.filename, source=self.source)
             result = None
             for _ in range(int(count)):
@@ -233,7 +233,7 @@ class Interpreter:
         if isinstance(node, ForStmt):
             iterable = self.eval_expr(node.iterable)
             if not isinstance(iterable, (list, str, dict)):
-                raise FeelError.type_error(node, f"'for' butuh list/text/map, dapat {_type_of(iterable)}",
+                raise FeelError.type_error(node, f"'for' expects list/text/map, got {_type_of(iterable)}",
                                            filename=self.filename, source=self.source)
             result = None
             items = list(iterable.keys()) if isinstance(iterable, dict) else iterable
@@ -282,8 +282,8 @@ class Interpreter:
                 for nm in node.expose:
                     if not module.env.has(nm):
                         raise FeelError.runtime(
-                            node, f"modul '{node.name}' tidak punya '{nm}'",
-                            hint=f"cek isi file {node.name}.feel",
+                            node, f"module '{node.name}' has no '{nm}'",
+                            hint=f"check the contents of {node.name}.feel",
                             filename=self.filename, source=self.source)
                     self.env.set(nm, module.env.get(nm))
             else:
@@ -298,7 +298,7 @@ class Interpreter:
                 if node.message:
                     msg = feel_str(self.eval_expr(node.message))
                 raise FeelError.runtime(node, msg,
-                                        hint="ekspresi assert harus bernilai true",
+                                        hint="assert expression must evaluate to true",
                                         filename=self.filename, source=self.source)
             return True
 
@@ -352,8 +352,8 @@ class Interpreter:
                 if op == '*': return l * r
                 if op == '/':
                     if r == 0:
-                        raise FeelError.runtime(node, "pembagian dengan nol",
-                                                hint="cek pembagi sebelum operasi",
+                        raise FeelError.runtime(node, "division by zero",
+                                                hint="check the divisor before dividing",
                                                 filename=self.filename, source=self.source)
                     return l / r
                 if op == '==': return l == r
@@ -368,7 +368,7 @@ class Interpreter:
                 raise
             except TypeError as e:
                 raise FeelError.type_error(node,
-                    f"operator '{op}' tidak bisa untuk {_type_of(l)} dan {_type_of(r)}",
+                    f"operator '{op}' cannot be applied to {_type_of(l)} and {_type_of(r)}",
                     filename=self.filename, source=self.source)
 
         if isinstance(node, UnaryOp):
@@ -431,19 +431,19 @@ class Interpreter:
                 if node.field in obj.fields:
                     return obj.fields[node.field]
                 raise FeelError.runtime(node,
-                    f"record '{obj.type_name}' tidak punya field '{node.field}'",
-                    hint=f"field yang ada: {', '.join(obj.fields.keys())}",
+                    f"record '{obj.type_name}' has no field '{node.field}'",
+                    hint=f"available fields: {', '.join(obj.fields.keys())}",
                     filename=self.filename, source=self.source)
             if isinstance(obj, FeelModule):
                 if obj.env.has(node.field):
                     return obj.env.get(node.field)
                 raise FeelError.runtime(node,
-                    f"modul '{obj.name}' tidak punya '{node.field}'",
+                    f"module '{obj.name}' has no '{node.field}'",
                     filename=self.filename, source=self.source)
             if isinstance(obj, dict):
                 return obj.get(node.field)
             raise FeelError.type_error(node,
-                f"tidak bisa akses field '.{node.field}' di {_type_of(obj)}",
+                f"cannot access field '.{node.field}' on {_type_of(obj)}",
                 filename=self.filename, source=self.source)
 
         if isinstance(node, IndexAccess):
@@ -455,10 +455,10 @@ class Interpreter:
                 try:
                     return obj[int(idx)]
                 except (ValueError, TypeError, IndexError) as e:
-                    raise FeelError.runtime(node, f"index tidak valid: {e}",
+                    raise FeelError.runtime(node, f"invalid index: {e}",
                                             filename=self.filename, source=self.source)
             raise FeelError.type_error(node,
-                f"tidak bisa index ke {_type_of(obj)}",
+                f"cannot index into {_type_of(obj)}",
                 filename=self.filename, source=self.source)
 
         if isinstance(node, RecordLiteral):
@@ -483,7 +483,7 @@ class Interpreter:
         if isinstance(node, TryStmt):
             return self.eval_stmt(node)
 
-        raise FeelError.runtime(node, f"node belum di-handle: {type(node).__name__}",
+        raise FeelError.runtime(node, f"node not yet handled: {type(node).__name__}",
                                 filename=self.filename, source=self.source)
 
     def _call_fn(self, fn, args, node=None):
@@ -501,14 +501,14 @@ class Interpreter:
                         return fn(args[0])
                     except Exception as e2:
                         raise FeelError.type_error(node or Literal(None),
-                            f"panggilan fungsi gagal: {e2}",
+                            f"function call failed: {e2}",
                             filename=self.filename, source=self.source)
                 raise FeelError.type_error(node or Literal(None),
-                    f"panggilan fungsi gagal: {e}",
+                    f"function call failed: {e}",
                     filename=self.filename, source=self.source)
             except Exception as e:
                 raise FeelError.runtime(node or Literal(None),
-                    f"error saat panggil fungsi: {e}",
+                    f"error while calling function: {e}",
                     filename=self.filename, source=self.source)
 
         if isinstance(fn, FeelFunction):
@@ -524,7 +524,7 @@ class Interpreter:
             return result
 
         raise FeelError.type_error(node or Literal(None),
-            f"'{feel_str(fn)}' bukan fungsi yang bisa dipanggil",
+            f"'{feel_str(fn)}' is not callable",
             filename=self.filename, source=self.source)
 
     def _load_module(self, import_node):
@@ -538,8 +538,8 @@ class Interpreter:
                 break
         if target is None:
             raise FeelError.runtime(import_node,
-                f"modul '{name}' tidak ditemukan",
-                hint=f"cari di: {', '.join(self.search_paths)}. Pastikan file {name}.feel ada.",
+                f"module '{name}' not found",
+                hint=f"searched in: {', '.join(self.search_paths)}. Make sure {name}.feel exists.",
                 filename=self.filename, source=self.source)
 
         if target in Interpreter._module_cache:
@@ -547,8 +547,8 @@ class Interpreter:
 
         if target in Interpreter._module_loading:
             raise FeelError.runtime(import_node,
-                f"circular import terdeteksi pada '{name}'",
-                hint="hindari saling import antar modul",
+                f"circular import detected on '{name}'",
+                hint="avoid modules importing each other",
                 filename=self.filename, source=self.source)
 
         Interpreter._module_loading.add(target)
