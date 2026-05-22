@@ -2,9 +2,18 @@
 import sys
 import os
 
+# Pastikan UTF-8 di Windows (banner & error messages pakai box-drawing + emoji)
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
 sys.path.insert(0, os.path.dirname(__file__))
 
 from interpreter import Interpreter, run_file
+from errors import FeelError, FeelThrow
 
 BANNER = """
   ███████╗███████╗███████╗██╗
@@ -13,34 +22,136 @@ BANNER = """
   ██╔══╝  ██╔══╝  ██╔══╝  ██║
   ██║     ███████╗███████╗███████╗
   ╚═╝     ╚══════╝╚══════╝╚══════╝
-  Feel v0.1  — code that flows
+  Feel v0.2  — code that flows
 """
 
-USAGE = """Usage:
-  python main.py                    interactive REPL
-  python main.py hello.feel         run with interpreter
-  python main.py --compile file.feel         compile to binary
-  python main.py --compile file.feel -o out  compile to named binary
-  python main.py --compile file.feel --keep-c  keep generated .c file
+USAGE = """Penggunaan:
+  python main.py                              REPL interaktif
+  python main.py file.feel                    jalankan file
+  python main.py test [tests_dir]             jalankan test suite
+  python main.py --compile file.feel          compile ke binary
+  python main.py --compile file.feel -o nama  compile ke binary dengan nama
+  python main.py --compile file.feel --keep-c simpan file .c sementara
 """
+
+
+_OPEN_BRACKETS = {'{': '}', '(': ')', '[': ']'}
+
+
+def _needs_continuation(buf):
+    """Cek apakah buffer Feel tidak lengkap (open brace/paren, trailing |/->)."""
+    stack = []
+    in_string = False
+    in_comment = False
+    i = 0
+    while i < len(buf):
+        c = buf[i]
+        if in_comment:
+            if c == '\n':
+                in_comment = False
+            i += 1
+            continue
+        if c == '"' and not in_string:
+            in_string = True
+        elif c == '"' and in_string:
+            in_string = False
+        elif not in_string:
+            if c == '-' and i + 1 < len(buf) and buf[i+1] == '-':
+                in_comment = True
+                i += 2
+                continue
+            if c in _OPEN_BRACKETS:
+                stack.append(c)
+            elif c in _OPEN_BRACKETS.values():
+                if stack and _OPEN_BRACKETS[stack[-1]] == c:
+                    stack.pop()
+        i += 1
+    if stack:
+        return True
+    # cek trailing operator: | atau ->
+    stripped = buf.rstrip()
+    if stripped.endswith('|') or stripped.endswith('->'):
+        return True
+    return False
+
 
 def repl():
     print(BANNER)
-    print('Type your Feel code. Type "exit" to quit.\n')
-    interp = Interpreter()
+    print('Ketik kode Feel. Ketik "exit" untuk keluar.\n')
+
+    # readline untuk history
+    try:
+        import readline  # noqa: F401
+    except ImportError:
+        try:
+            import pyreadline3  # noqa: F401
+        except ImportError:
+            pass
+
+    interp = Interpreter(filename='<repl>')
+    buf = ''
     while True:
         try:
-            line = input('feel> ')
-            if line.strip() in ('exit', 'quit'): break
-            if not line.strip(): continue
-            interp.run(line)
-        except (SyntaxError, NameError, TypeError, RuntimeError) as e:
-            print(f'Error: {e}')
+            prompt = 'feel> ' if not buf else '....> '
+            line = input(prompt)
+            if not buf and line.strip() in ('exit', 'quit'):
+                break
+            if not line.strip() and not buf:
+                continue
+            buf = (buf + '\n' + line) if buf else line
+            if _needs_continuation(buf):
+                continue
+            try:
+                # tampilkan hasil ekspresi terakhir (jika bukan stmt yang sudah print sendiri)
+                result = interp.run(buf)
+                if result is not None and not buf.lstrip().startswith('show'):
+                    # auto-display kalau bukan show stmt yang sudah print
+                    pass  # disable auto-print supaya tidak duplicate
+            except FeelError as e:
+                print(str(e))
+            except FeelThrow as ft:
+                print(f"Uncaught throw: {ft.value}")
+            buf = ''
         except KeyboardInterrupt:
-            print('\nBye!')
-            break
+            print('\nDibatalkan')
+            buf = ''
+            continue
         except EOFError:
+            print()
             break
+
+
+def run_tests(tests_dir='tests'):
+    """Jalankan semua *_test.feel di folder tests/."""
+    import glob
+    if not os.path.isdir(tests_dir):
+        print(f"Folder test tidak ditemukan: {tests_dir}")
+        return 1
+    files = sorted(glob.glob(os.path.join(tests_dir, '*_test.feel')))
+    if not files:
+        print(f"Tidak ada *_test.feel di {tests_dir}")
+        return 1
+    passed = 0
+    failed = 0
+    for f in files:
+        name = os.path.basename(f)
+        try:
+            run_file(f)
+            print(f"  PASS  {name}")
+            passed += 1
+        except FeelError as e:
+            print(f"  FAIL  {name}")
+            print(str(e))
+            failed += 1
+        except FeelThrow as ft:
+            print(f"  FAIL  {name}  (uncaught throw: {ft.value})")
+            failed += 1
+        except Exception as e:
+            print(f"  FAIL  {name}  (unexpected: {e})")
+            failed += 1
+    print(f"\n{passed} pass, {failed} fail dari {len(files)} test.")
+    return 0 if failed == 0 else 1
+
 
 def main():
     args = sys.argv[1:]
@@ -49,25 +160,33 @@ def main():
         repl()
         return
 
+    if args[0] == 'test':
+        tests_dir = args[1] if len(args) > 1 else 'tests'
+        sys.exit(run_tests(tests_dir))
+
+    if args[0] in ('-h', '--help', 'help'):
+        print(USAGE)
+        return
+
     if args[0] == '--compile':
         from compiler import compile_file
         args = args[1:]
         if not args:
-            print("Error: --compile requires a .feel file")
+            print("Error: --compile butuh file .feel")
             sys.exit(1)
         feel_path = args[0]
         out_path = None
         keep_c = False
         i = 1
         while i < len(args):
-            if args[i] == '-o' and i+1 < len(args):
+            if args[i] == '-o' and i + 1 < len(args):
                 out_path = args[i+1]; i += 2
             elif args[i] == '--keep-c':
                 keep_c = True; i += 1
             else:
                 i += 1
         if not os.path.exists(feel_path):
-            print(f"Error: file '{feel_path}' not found")
+            print(f"Error: file '{feel_path}' tidak ditemukan")
             sys.exit(1)
         ok = compile_file(feel_path, out_path=out_path, keep_c=keep_c)
         sys.exit(0 if ok else 1)
@@ -75,13 +194,17 @@ def main():
     # Interpret mode
     path = args[0]
     if not os.path.exists(path):
-        print(f"Error: file '{path}' not found")
+        print(f"Error: file '{path}' tidak ditemukan")
         sys.exit(1)
     try:
         run_file(path)
-    except (SyntaxError, NameError, TypeError, RuntimeError) as e:
-        print(f'Error: {e}')
+    except FeelError as e:
+        print(str(e), file=sys.stderr)
         sys.exit(1)
+    except FeelThrow as ft:
+        print(f"Uncaught throw: {ft.value}", file=sys.stderr)
+        sys.exit(1)
+
 
 if __name__ == '__main__':
     main()

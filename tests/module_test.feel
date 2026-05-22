@@ -1,0 +1,10 @@
+-- modul greet_mod sudah ada di tests/
+import greet_mod
+assert greet_mod.hello("X") == "Halo, X!", "namespace import"
+assert greet_mod.language == "Feel", "module var"
+
+-- expose selective
+import greet_mod expose salam
+assert salam("Y") == "Salam, Y.", "expose"
+
+show -> "module_test OK"

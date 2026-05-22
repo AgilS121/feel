@@ -1,0 +1,31 @@
+-- Tes literal & arithmetic
+assert 1 + 1 == 2, "tambah dasar"
+assert 10 - 3 == 7, "kurang"
+assert 4 * 3 == 12, "kali"
+assert 10 / 4 == 2.5, "bagi"
+
+-- Tes string
+assert "Hello" + " " + "World" == "Hello World", "concat"
+assert uppercase("feel") == "FEEL", "uppercase"
+assert length("hello") == 5, "length"
+
+-- Tes boolean & comparison
+assert (5 > 3) == true, "gt"
+assert (5 < 3) == false, "lt"
+assert (1 == 1) and (2 == 2), "and"
+assert true or false, "or"
+assert not false, "not"
+
+-- Tes list
+let nums = [1, 2, 3, 4, 5]
+assert length(nums) == 5, "list length"
+assert sum(nums) == 15, "sum"
+assert first(nums) == 1, "first"
+assert last(nums) == 5, "last"
+
+-- Tes when/otherwise
+let umur = 20
+let kategori = when umur >= 18 -> "dewasa" otherwise -> "anak"
+assert kategori == "dewasa", "when"
+
+show -> "basic_test OK"

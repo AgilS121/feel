@@ -1,0 +1,5 @@
+-- modul untuk di-import
+define hello taking nama -> "Halo, {nama}!"
+define salam taking nama -> "Salam, {nama}."
+
+let language = "Feel"

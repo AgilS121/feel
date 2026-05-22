@@ -1,0 +1,22 @@
+-- Tes throw + catch
+let r1 = try throw "oops" catch err -> "caught: {err}"
+assert r1 == "caught: oops", "basic throw/catch"
+
+-- Tes nested try
+let r2 = try (try throw "inner" catch e -> throw "outer:{e}") catch x -> x
+assert r2 == "outer:inner", "nested try"
+
+-- Tes no throw → body value
+let r3 = try 42 catch e -> 0
+assert r3 == 42, "no throw"
+
+-- Tes pipeline catch
+define risky taking x -> throw "kaboom"
+let r4 = 5 | risky | catch -> 99
+assert r4 == 99, "pipeline catch"
+
+-- Tes pipeline tanpa error → catch tidak fire
+let r5 = "abc" | uppercase | catch -> "default"
+assert r5 == "ABC", "catch passthrough"
+
+show -> "error_handling_test OK"

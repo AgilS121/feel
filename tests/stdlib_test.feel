@@ -1,0 +1,29 @@
+-- string
+assert string.trim("  hi  ") == "hi", "trim"
+assert string.replace("hello", "l", "L") == "heLLo", "replace"
+assert string.starts_with("feel lang", "feel") == true, "starts_with"
+assert string.ends_with("feel lang", "lang") == true, "ends_with"
+assert string.repeat("ab", 3) == "ababab", "repeat"
+assert string.slice("hello world", 0, 5) == "hello", "slice"
+
+-- list
+assert list.range(1, 4) == [1, 2, 3], "range"
+assert list.reverse([1, 2, 3]) == [3, 2, 1], "reverse"
+assert list.sort([3, 1, 2]) == [1, 2, 3], "sort"
+assert list.unique([1, 1, 2, 2, 3]) == [1, 2, 3], "unique"
+assert list.take([1, 2, 3, 4, 5], 3) == [1, 2, 3], "take"
+assert list.drop([1, 2, 3, 4, 5], 2) == [3, 4, 5], "drop"
+
+-- math
+assert math.sqrt(9) == 3, "sqrt"
+assert math.floor(3.7) == 3, "floor"
+assert math.ceil(3.2) == 4, "ceil"
+
+-- json roundtrip
+let data = map { name: "Feel", n: 42 }
+let s = json.encode(data)
+let back = json.decode(s)
+assert back["name"] == "Feel", "json name"
+assert back["n"] == 42, "json n"
+
+show -> "stdlib_test OK"

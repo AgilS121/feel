@@ -1,0 +1,5 @@
+feel is a programming language
+feel is simple and readable
+the language is designed for indonesian developers
+feel makes rest api easy
+language is fun when it is feel

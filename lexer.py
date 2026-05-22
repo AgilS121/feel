@@ -27,39 +27,58 @@ TOKENS = [
     ('LBRACKET',  r'\['),
     ('RBRACKET',  r'\]'),
     ('NEWLINE',   r'\n'),
-    ('SKIP',      r'[ \t]+'),
-    ('KEYWORD',   r'\b(let|define|taking|show|record|when|otherwise|repeat|times|for|in|and|or|not|true|false|nothing)\b'),
+    ('SKIP',      r'[ \t\r]+'),
+    ('KEYWORD',   r'\b(let|define|taking|show|record|when|otherwise|repeat|times|for|in|and|or|not|true|false|nothing|try|catch|throw|error|map|import|from|expose|assert)\b'),
     ('IDENT',     r'[a-zA-Z_][a-zA-Z0-9_]*'),
+    ('MISMATCH',  r'.'),
 ]
 
 TOKEN_RE = re.compile('|'.join(f'(?P<{name}>{pattern})' for name, pattern in TOKENS))
 
+
 class Token:
-    def __init__(self, type_, value, line):
+    __slots__ = ('type', 'value', 'line', 'col', 'offset')
+
+    def __init__(self, type_, value, line, col, offset=0):
         self.type = type_
         self.value = value
         self.line = line
-    def __repr__(self):
-        return f'Token({self.type}, {self.value!r})'
+        self.col = col
+        self.offset = offset
 
-def tokenize(source):
+    def __repr__(self):
+        return f'Token({self.type}, {self.value!r}, {self.line}:{self.col})'
+
+
+def tokenize(source, filename='<input>'):
+    from errors import FeelError
     tokens = []
     line = 1
+    line_start = 0  # offset of start of current line
     for m in TOKEN_RE.finditer(source):
         kind = m.lastgroup
         value = m.group()
+        col = m.start() - line_start + 1
         if kind == 'SKIP' or kind == 'COMMENT':
             continue
-        elif kind == 'NEWLINE':
+        if kind == 'NEWLINE':
+            tokens.append(Token('NEWLINE', '\n', line, col, m.start()))
             line += 1
-            tokens.append(Token('NEWLINE', '\n', line))
-        elif kind == 'NUMBER':
+            line_start = m.end()
+            continue
+        if kind == 'MISMATCH':
+            raise FeelError.syntax_at(
+                filename, source, line, col,
+                f"karakter tidak dikenali: {value!r}",
+                hint="cek apakah karakter ini seharusnya ada di Feel."
+            )
+        if kind == 'NUMBER':
             value = float(value) if '.' in value else int(value)
-            tokens.append(Token('NUMBER', value, line))
+            tokens.append(Token('NUMBER', value, line, col, m.start()))
         elif kind == 'STRING':
-            tokens.append(Token('STRING', value[1:-1], line))
+            tokens.append(Token('STRING', value[1:-1], line, col, m.start()))
         elif kind == 'KEYWORD':
-            tokens.append(Token(value.upper(), value, line))
+            tokens.append(Token(value.upper(), value, line, col, m.start()))
         else:
-            tokens.append(Token(kind, value, line))
+            tokens.append(Token(kind, value, line, col, m.start()))
     return tokens

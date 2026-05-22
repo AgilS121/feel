@@ -1,0 +1,17 @@
+-- Tes file IO + json roundtrip ke disk
+let path = "tests/_tmp_file_test.json"
+
+let data = map { name: "Feel", version: "0.2", tags: ["lang", "rest"] }
+file.write(path, json.encode(data, true))
+
+assert file.exists(path) == true, "file exists"
+
+let content = file.read(path)
+let parsed = json.decode(content)
+assert parsed["name"] == "Feel", "roundtrip name"
+assert parsed["version"] == "0.2", "roundtrip version"
+
+file.delete(path)
+assert file.exists(path) == false, "file deleted"
+
+show -> "file_io_test OK"

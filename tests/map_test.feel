@@ -1,0 +1,33 @@
+-- Tes map literal
+let user = map { name: "Budi", age: 25 }
+assert user["name"] == "Budi", "map index by string"
+assert user["age"] == 25, "map index number"
+
+-- Tes map.* operations
+assert map.size(user) == 2, "size"
+assert map.has(user, "name") == true, "has true"
+assert map.has(user, "xxx") == false, "has false"
+assert map.get(user, "name") == "Budi", "get"
+assert map.get(user, "xxx", "default") == "default", "get default"
+
+-- Immutable set
+let user2 = map.set(user, "age", 30)
+assert user2["age"] == 30, "set new"
+assert user["age"] == 25, "set immutable"
+
+-- delete
+let user3 = map.delete(user, "age")
+assert map.has(user3, "age") == false, "delete"
+assert map.has(user, "age") == true, "delete immutable"
+
+-- merge
+let extra = map { city: "Jakarta" }
+let combined = map.merge(user, extra)
+assert combined["name"] == "Budi", "merge keeps a"
+assert combined["city"] == "Jakarta", "merge adds b"
+
+-- key bisa string juga
+let m2 = map { "key-with-dash": "ok" }
+assert m2["key-with-dash"] == "ok", "string key"
+
+show -> "map_test OK"

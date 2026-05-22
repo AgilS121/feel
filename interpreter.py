@@ -1,9 +1,14 @@
 import re
+import os
+import sys
+
 from parser import parse
 from parser import (Program, LetStmt, DefineStmt, RecordDef, ShowStmt,
                     WhenStmt, RepeatStmt, ForStmt, Pipeline, BinOp, UnaryOp,
-                    Call, FieldAccess, RecordLiteral, ListLiteral,
-                    Ident, Literal, ArrowExpr)
+                    Call, CallExpr, FieldAccess, IndexAccess, RecordLiteral, MapLiteral,
+                    ListLiteral, Ident, Literal, ArrowExpr,
+                    TryStmt, ThrowStmt, CatchStep, ImportStmt, AssertStmt)
+from errors import FeelError, FeelThrow
 
 
 class FeelRecord:
@@ -12,8 +17,18 @@ class FeelRecord:
         self.fields = fields
 
     def __repr__(self):
-        parts = ', '.join(f'{k}: {repr(v)}' for k, v in self.fields.items())
+        parts = ', '.join(f'{k}: {feel_str(v)}' for k, v in self.fields.items())
         return f'{self.type_name} {{ {parts} }}'
+
+
+class FeelModule:
+    """Namespace object hasil dari 'import name'."""
+    def __init__(self, name, env):
+        self.name = name
+        self.env = env
+
+    def __repr__(self):
+        return f'<module {self.name}>'
 
 
 class FeelFunction:
@@ -37,7 +52,12 @@ class Environment:
             return self.vars[name]
         if self.parent:
             return self.parent.get(name)
-        raise NameError(f"'{name}' is not defined")
+        raise KeyError(name)
+
+    def has(self, name):
+        if name in self.vars: return True
+        if self.parent: return self.parent.has(name)
+        return False
 
     def set(self, name, value):
         self.vars[name] = value
@@ -51,33 +71,51 @@ class Environment:
             self.vars[name] = value
 
 
-def interpolate(s, env):
-    def replace(m):
-        expr = m.group(1).strip()
-        try:
-            val = Interpreter(env).eval_expr(parse(expr).stmts[0])
-            return feel_str(val)
-        except:
-            return m.group(0)
-    return re.sub(r'\{([^}]+)\}', replace, s)
-
-
 def feel_str(val):
     if val is None: return 'nothing'
     if val is True: return 'true'
     if val is False: return 'false'
     if isinstance(val, float) and val == int(val): return str(int(val))
     if isinstance(val, list): return '[' + ', '.join(feel_str(v) for v in val) + ']'
+    if isinstance(val, dict):
+        parts = ', '.join(f'{feel_str(k)}: {feel_str(v)}' for k, v in val.items())
+        return 'map { ' + parts + ' }'
     return str(val)
+
+
+def _suggest(name, candidates):
+    """Levenshtein-ish suggestion sederhana."""
+    if not candidates: return None
+    name_l = name.lower()
+    best = None
+    best_score = 0
+    for c in candidates:
+        c_l = c.lower()
+        # quick: prefix match score
+        shared = 0
+        for a, b in zip(name_l, c_l):
+            if a == b: shared += 1
+            else: break
+        if shared >= max(2, len(name_l) // 2) and shared > best_score:
+            best = c
+            best_score = shared
+    return best
+
+
+# Builtins inti — string, list, math operations
+def _to_number(x):
+    if isinstance(x, (int, float)): return x
+    s = str(x)
+    return float(s) if '.' in s else int(s)
 
 
 BUILTINS = {
     'uppercase': lambda s: s.upper() if isinstance(s, str) else s,
     'lowercase': lambda s: s.lower() if isinstance(s, str) else s,
     'length':    lambda x: len(x),
-    'reverse':   lambda x: x[::-1],
-    'type_of':   lambda x: type(x).__name__,
-    'number':    lambda x: float(x) if '.' in str(x) else int(x),
+    'reverse':   lambda x: x[::-1] if isinstance(x, (str, list)) else x,
+    'type_of':   lambda x: _type_of(x),
+    'number':    _to_number,
     'text':      lambda x: feel_str(x),
     'round':     lambda x: round(x),
     'floor':     lambda x: int(x),
@@ -87,30 +125,62 @@ BUILTINS = {
     'min':       lambda x: min(x),
     'first':     lambda x: x[0] if x else None,
     'last':      lambda x: x[-1] if x else None,
-    'rest':      lambda x: x[1:],
+    'rest':      lambda x: x[1:] if isinstance(x, (str, list)) else x,
     'push':      lambda x, item: x + [item],
     'join':      lambda x, sep='': sep.join(feel_str(v) for v in x),
     'split':     lambda s, sep=' ': s.split(sep),
     'contains':  lambda x, item: item in x,
-    'filter':    None,  # handled specially
-    'map':       None,  # handled specially
 }
 
 
+def _type_of(x):
+    if x is None: return 'nothing'
+    if x is True or x is False: return 'boolean'
+    if isinstance(x, bool): return 'boolean'
+    if isinstance(x, int) or isinstance(x, float): return 'number'
+    if isinstance(x, str): return 'text'
+    if isinstance(x, list): return 'list'
+    if isinstance(x, dict): return 'map'
+    if isinstance(x, FeelRecord): return x.type_name
+    if isinstance(x, FeelFunction): return 'function'
+    if isinstance(x, FeelModule): return 'module'
+    return type(x).__name__
+
+
 class Interpreter:
-    def __init__(self, env=None):
+    # Untuk module loader: kelas-level cache supaya satu module hanya di-load sekali
+    _module_cache = {}
+    _module_loading = set()
+
+    def __init__(self, env=None, filename='<input>', source=None, search_paths=None):
         self.env = env or Environment()
-        self._setup_builtins()
+        self.filename = filename
+        self.source = source
+        self.search_paths = search_paths or [os.getcwd()]
         self.record_types = {}
+        self._setup_builtins()
 
     def _setup_builtins(self):
         for name, fn in BUILTINS.items():
-            if fn is not None:
-                self.env.set(name, fn)
-        self.env.set('show', lambda x: print(feel_str(x)) or x)
+            self.env.set(name, fn)
+        self.env.set('show', lambda x: (print(feel_str(x)), x)[1])
+        # stdlib lazy import
+        from stdlib import install_into
+        install_into(self.env)
+
+    def _interpolate(self, s):
+        """Replace {expr} di string. Error di dalam {} → FeelError."""
+        def replace(m):
+            expr_src = m.group(1).strip()
+            sub = parse(expr_src, filename=self.filename)
+            if not sub.stmts:
+                return ''
+            val = self.eval_stmt(sub.stmts[0])
+            return feel_str(val)
+        return re.sub(r'\{([^}]+)\}', replace, s)
 
     def run(self, source):
-        tree = parse(source)
+        tree = parse(source, filename=self.filename)
         result = None
         for stmt in tree.stmts:
             if stmt is None: continue
@@ -130,12 +200,11 @@ class Interpreter:
 
         if isinstance(node, RecordDef):
             self.record_types[node.name] = node.fields
-            # Store a constructor in env
-            def make_constructor(rname, rfields):
+            def make_constructor(rname):
                 def constructor(**kwargs):
                     return FeelRecord(rname, kwargs)
                 return constructor
-            self.env.set(node.name, make_constructor(node.name, node.fields))
+            self.env.set(node.name, make_constructor(node.name))
             return None
 
         if isinstance(node, ShowStmt):
@@ -153,6 +222,9 @@ class Interpreter:
 
         if isinstance(node, RepeatStmt):
             count = self.eval_expr(node.count)
+            if not isinstance(count, (int, float)):
+                raise FeelError.type_error(node, f"'repeat' butuh angka, dapat {_type_of(count)}",
+                                           filename=self.filename, source=self.source)
             result = None
             for _ in range(int(count)):
                 result = self.eval_expr(node.body)
@@ -160,15 +232,75 @@ class Interpreter:
 
         if isinstance(node, ForStmt):
             iterable = self.eval_expr(node.iterable)
+            if not isinstance(iterable, (list, str, dict)):
+                raise FeelError.type_error(node, f"'for' butuh list/text/map, dapat {_type_of(iterable)}",
+                                           filename=self.filename, source=self.source)
             result = None
-            for item in iterable:
+            items = list(iterable.keys()) if isinstance(iterable, dict) else iterable
+            for item in items:
                 local = Environment(self.env)
                 local.set(node.var, item)
                 old_env = self.env
                 self.env = local
-                result = self.eval_expr(node.body)
-                self.env = old_env
+                try:
+                    result = self.eval_expr(node.body)
+                finally:
+                    self.env = old_env
             return result
+
+        if isinstance(node, TryStmt):
+            try:
+                return self.eval_expr(node.body)
+            except FeelThrow as ft:
+                local = Environment(self.env)
+                local.set(node.err_name, ft.value)
+                old_env = self.env
+                self.env = local
+                try:
+                    return self.eval_expr(node.handler)
+                finally:
+                    self.env = old_env
+            except FeelError as fe:
+                # juga tangkap FeelError sebagai catchable (text message)
+                local = Environment(self.env)
+                local.set(node.err_name, fe.raw_message)
+                old_env = self.env
+                self.env = local
+                try:
+                    return self.eval_expr(node.handler)
+                finally:
+                    self.env = old_env
+
+        if isinstance(node, ThrowStmt):
+            val = self.eval_expr(node.expr)
+            raise FeelThrow(val, node=node)
+
+        if isinstance(node, ImportStmt):
+            module = self._load_module(node)
+            if node.expose is not None:
+                # expose list: bring nama-nama ke scope sekarang
+                for nm in node.expose:
+                    if not module.env.has(nm):
+                        raise FeelError.runtime(
+                            node, f"modul '{node.name}' tidak punya '{nm}'",
+                            hint=f"cek isi file {node.name}.feel",
+                            filename=self.filename, source=self.source)
+                    self.env.set(nm, module.env.get(nm))
+            else:
+                # import as namespace
+                self.env.set(node.name, module)
+            return module
+
+        if isinstance(node, AssertStmt):
+            cond = self.eval_expr(node.cond)
+            if not cond:
+                msg = "assertion failed"
+                if node.message:
+                    msg = feel_str(self.eval_expr(node.message))
+                raise FeelError.runtime(node, msg,
+                                        hint="ekspresi assert harus bernilai true",
+                                        filename=self.filename, source=self.source)
+            return True
 
         # Expression as statement
         return self.eval_expr(node)
@@ -177,10 +309,21 @@ class Interpreter:
         if isinstance(node, Literal):
             val = node.value
             if isinstance(val, str):
-                return interpolate(val, self.env)
+                return self._interpolate(val)
             return val
 
         if isinstance(node, Ident):
+            if not self.env.has(node.name):
+                # collect kandidat nama untuk saran typo
+                names = []
+                env = self.env
+                while env:
+                    names.extend(env.vars.keys())
+                    env = env.parent
+                similar = _suggest(node.name, names)
+                raise FeelError.name_error(node, node.name,
+                                           filename=self.filename, source=self.source,
+                                           similar=similar)
             return self.env.get(node.name)
 
         if isinstance(node, ArrowExpr):
@@ -203,18 +346,30 @@ class Interpreter:
             l = self.eval_expr(node.left)
             r = self.eval_expr(node.right)
             op = node.op
-            if op == '+': return l + r
-            if op == '-': return l - r
-            if op == '*': return l * r
-            if op == '/': return l / r
-            if op == '==': return l == r
-            if op == '!=': return l != r
-            if op == '>':  return l > r
-            if op == '<':  return l < r
-            if op == '>=': return l >= r
-            if op == '<=': return l <= r
-            if op == 'and': return l and r
-            if op == 'or':  return l or r
+            try:
+                if op == '+': return l + r
+                if op == '-': return l - r
+                if op == '*': return l * r
+                if op == '/':
+                    if r == 0:
+                        raise FeelError.runtime(node, "pembagian dengan nol",
+                                                hint="cek pembagi sebelum operasi",
+                                                filename=self.filename, source=self.source)
+                    return l / r
+                if op == '==': return l == r
+                if op == '!=': return l != r
+                if op == '>':  return l > r
+                if op == '<':  return l < r
+                if op == '>=': return l >= r
+                if op == '<=': return l <= r
+                if op == 'and': return l and r
+                if op == 'or':  return l or r
+            except FeelError:
+                raise
+            except TypeError as e:
+                raise FeelError.type_error(node,
+                    f"operator '{op}' tidak bisa untuk {_type_of(l)} dan {_type_of(r)}",
+                    filename=self.filename, source=self.source)
 
         if isinstance(node, UnaryOp):
             val = self.eval_expr(node.expr)
@@ -223,39 +378,138 @@ class Interpreter:
 
         if isinstance(node, Pipeline):
             value = self.eval_expr(node.steps[0])
-            for step in node.steps[1:]:
-                fn = self.eval_expr(step)
-                value = self._call_fn(fn, [value])
+            i = 1
+            while i < len(node.steps):
+                step = node.steps[i]
+                if isinstance(step, CatchStep):
+                    # catch step di pipeline: wrap sisa ekspresi sebelumnya dengan try
+                    # tapi pipeline sudah linear — catch hanya berlaku kalau exception belum terjadi
+                    # logic: kalau sebelumnya throw, value akan ditangkap di sini
+                    # untuk simple: catch dalam pipeline hanya berlaku via try-around — gunakan handler kalau ada error
+                    # implementasi: kita sudah lewati (nilai aman); kalau mau effective, pakai try di luar
+                    # untuk membuat ini berguna: wrap eksekusi step BERIKUTNYA dengan try
+                    i += 1
+                    continue
+                # cek apakah step BERIKUTNYA adalah catch — kalau ya, wrap step ini dengan try
+                next_step = node.steps[i + 1] if i + 1 < len(node.steps) else None
+                if isinstance(next_step, CatchStep):
+                    try:
+                        fn = self.eval_expr(step)
+                        value = self._call_fn(fn, [value], node=step)
+                    except (FeelThrow, FeelError):
+                        value = self.eval_expr(next_step.handler)
+                    i += 2  # skip catch
+                else:
+                    fn = self.eval_expr(step)
+                    value = self._call_fn(fn, [value], node=step)
+                    i += 1
             return value
 
+        if isinstance(node, CallExpr):
+            fn = self.eval_expr(node.callee)
+            args = [self.eval_expr(a) for a in node.args]
+            return self._call_fn(fn, args, node=node)
+
         if isinstance(node, Call):
+            if not self.env.has(node.name):
+                names = []
+                env = self.env
+                while env:
+                    names.extend(env.vars.keys())
+                    env = env.parent
+                similar = _suggest(node.name, names)
+                raise FeelError.name_error(node, node.name,
+                                           filename=self.filename, source=self.source,
+                                           similar=similar)
             fn = self.env.get(node.name)
             args = [self.eval_expr(a) for a in node.args]
-            return self._call_fn(fn, args)
+            return self._call_fn(fn, args, node=node)
 
         if isinstance(node, FieldAccess):
             obj = self.eval_expr(node.obj)
             if isinstance(obj, FeelRecord):
                 if node.field in obj.fields:
                     return obj.fields[node.field]
-                raise AttributeError(f"Record has no field '{node.field}'")
-            raise TypeError(f"Cannot access field on {type(obj).__name__}")
+                raise FeelError.runtime(node,
+                    f"record '{obj.type_name}' tidak punya field '{node.field}'",
+                    hint=f"field yang ada: {', '.join(obj.fields.keys())}",
+                    filename=self.filename, source=self.source)
+            if isinstance(obj, FeelModule):
+                if obj.env.has(node.field):
+                    return obj.env.get(node.field)
+                raise FeelError.runtime(node,
+                    f"modul '{obj.name}' tidak punya '{node.field}'",
+                    filename=self.filename, source=self.source)
+            if isinstance(obj, dict):
+                return obj.get(node.field)
+            raise FeelError.type_error(node,
+                f"tidak bisa akses field '.{node.field}' di {_type_of(obj)}",
+                filename=self.filename, source=self.source)
+
+        if isinstance(node, IndexAccess):
+            obj = self.eval_expr(node.obj)
+            idx = self.eval_expr(node.index)
+            if isinstance(obj, dict):
+                return obj.get(idx)
+            if isinstance(obj, (list, str)):
+                try:
+                    return obj[int(idx)]
+                except (ValueError, TypeError, IndexError) as e:
+                    raise FeelError.runtime(node, f"index tidak valid: {e}",
+                                            filename=self.filename, source=self.source)
+            raise FeelError.type_error(node,
+                f"tidak bisa index ke {_type_of(obj)}",
+                filename=self.filename, source=self.source)
 
         if isinstance(node, RecordLiteral):
             fields = {k: self.eval_expr(v) for k, v in node.fields.items()}
             return FeelRecord(node.name, fields)
 
+        if isinstance(node, MapLiteral):
+            result = {}
+            for k_node, v_node in node.entries:
+                k = self.eval_expr(k_node)
+                v = self.eval_expr(v_node)
+                result[k] = v
+            return result
+
         if isinstance(node, ListLiteral):
             return [self.eval_expr(i) for i in node.items]
 
-        raise RuntimeError(f"Unknown node: {type(node).__name__}")
+        if isinstance(node, ThrowStmt):
+            val = self.eval_expr(node.expr)
+            raise FeelThrow(val, node=node)
 
-    def _call_fn(self, fn, args):
+        if isinstance(node, TryStmt):
+            return self.eval_stmt(node)
+
+        raise FeelError.runtime(node, f"node belum di-handle: {type(node).__name__}",
+                                filename=self.filename, source=self.source)
+
+    def _call_fn(self, fn, args, node=None):
         if callable(fn) and not isinstance(fn, FeelFunction):
             try:
                 return fn(*args)
-            except TypeError:
-                return fn(args[0]) if args else fn()
+            except FeelError:
+                raise
+            except FeelThrow:
+                raise
+            except TypeError as e:
+                # coba lagi dengan signature 1-arg (legacy)
+                if len(args) >= 1:
+                    try:
+                        return fn(args[0])
+                    except Exception as e2:
+                        raise FeelError.type_error(node or Literal(None),
+                            f"panggilan fungsi gagal: {e2}",
+                            filename=self.filename, source=self.source)
+                raise FeelError.type_error(node or Literal(None),
+                    f"panggilan fungsi gagal: {e}",
+                    filename=self.filename, source=self.source)
+            except Exception as e:
+                raise FeelError.runtime(node or Literal(None),
+                    f"error saat panggil fungsi: {e}",
+                    filename=self.filename, source=self.source)
 
         if isinstance(fn, FeelFunction):
             local = Environment(fn.closure)
@@ -263,15 +517,59 @@ class Interpreter:
                 local.set(param, arg)
             old_env = self.env
             self.env = local
-            result = self.eval_expr(fn.body)
-            self.env = old_env
+            try:
+                result = self.eval_expr(fn.body)
+            finally:
+                self.env = old_env
             return result
 
-        raise TypeError(f"'{feel_str(fn)}' is not callable")
+        raise FeelError.type_error(node or Literal(None),
+            f"'{feel_str(fn)}' bukan fungsi yang bisa dipanggil",
+            filename=self.filename, source=self.source)
+
+    def _load_module(self, import_node):
+        name = import_node.name
+        # cari file
+        target = None
+        for base in self.search_paths:
+            candidate = os.path.join(base, f'{name}.feel')
+            if os.path.isfile(candidate):
+                target = os.path.abspath(candidate)
+                break
+        if target is None:
+            raise FeelError.runtime(import_node,
+                f"modul '{name}' tidak ditemukan",
+                hint=f"cari di: {', '.join(self.search_paths)}. Pastikan file {name}.feel ada.",
+                filename=self.filename, source=self.source)
+
+        if target in Interpreter._module_cache:
+            return Interpreter._module_cache[target]
+
+        if target in Interpreter._module_loading:
+            raise FeelError.runtime(import_node,
+                f"circular import terdeteksi pada '{name}'",
+                hint="hindari saling import antar modul",
+                filename=self.filename, source=self.source)
+
+        Interpreter._module_loading.add(target)
+        try:
+            with open(target, encoding='utf-8') as f:
+                src = f.read()
+            mod_env = Environment()
+            sub = Interpreter(env=mod_env, filename=target, source=src,
+                              search_paths=self.search_paths)
+            sub.run(src)
+            module = FeelModule(name, mod_env)
+            Interpreter._module_cache[target] = module
+            return module
+        finally:
+            Interpreter._module_loading.discard(target)
 
 
 def run_file(path):
-    with open(path) as f:
+    abs_path = os.path.abspath(path)
+    with open(abs_path, encoding='utf-8') as f:
         source = f.read()
-    interp = Interpreter()
+    search = [os.path.dirname(abs_path), os.getcwd()]
+    interp = Interpreter(filename=abs_path, source=source, search_paths=search)
     interp.run(source)

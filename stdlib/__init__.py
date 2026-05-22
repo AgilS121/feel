@@ -1,0 +1,28 @@
+"""Feel standard library — auto-loaded ke env saat interpreter start."""
+
+from . import string_ext
+from . import map_ops
+from . import json_mod
+from . import time_mod
+from . import file_mod
+from . import math_mod
+from . import list_ops
+
+
+def install_into(env):
+    """Pasang module-module stdlib ke env sebagai namespace object."""
+    from interpreter import FeelModule, Environment
+
+    for mod_name, mod_funcs in [
+        ('string', string_ext.EXPORTS),
+        ('map', map_ops.EXPORTS),
+        ('json', json_mod.EXPORTS),
+        ('time', time_mod.EXPORTS),
+        ('file', file_mod.EXPORTS),
+        ('math', math_mod.EXPORTS),
+        ('list', list_ops.EXPORTS),
+    ]:
+        mod_env = Environment()
+        for n, fn in mod_funcs.items():
+            mod_env.set(n, fn)
+        env.set(mod_name, FeelModule(mod_name, mod_env))
