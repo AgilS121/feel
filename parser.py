@@ -157,8 +157,10 @@ class RespondExpr(Node):
 
 
 class ServeStmt(Node):
-    """serve on PORT — start HTTP server, blocking."""
-    def __init__(self, port): self.port = port
+    """serve on PORT [cors] — start HTTP server, blocking."""
+    def __init__(self, port, cors=False):
+        self.port = port
+        self.cors = cors
 
 
 class ToolDecl(Node):
@@ -246,7 +248,7 @@ class Parser:
         'TRY', 'CATCH', 'THROW', 'ERROR', 'MAP',
         'IMPORT', 'FROM', 'EXPOSE', 'ASSERT', 'FN', 'DO',
         'ROUTE', 'RESPOND', 'SERVE', 'ON', 'EXPECTS',
-        'TOOL', 'AGENT',
+        'TOOL', 'AGENT', 'CORS',
     }
 
     # Token types yang bisa mulai sebuah ekspresi (untuk lookahead di respond)
@@ -489,7 +491,11 @@ class Parser:
         self.expect('ON', hint="'serve' must be followed by 'on PORT'")
         port_tok = self.expect('NUMBER', hint="'on' must be followed by a port number")
         port = int(port_tok.value)
-        return _pos(ServeStmt(port), t)
+        cors = False
+        if self.current() and self.current().type == 'CORS':
+            self.advance()
+            cors = True
+        return _pos(ServeStmt(port, cors=cors), t)
 
     def parse_tool(self):
         t = self.advance()  # tool

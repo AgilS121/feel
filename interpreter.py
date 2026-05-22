@@ -378,7 +378,7 @@ class Interpreter:
 
         if isinstance(node, ServeStmt):
             from runtime.http import serve
-            serve(port=node.port)
+            serve(port=node.port, cors=node.cors)
             return None
 
         if isinstance(node, ToolDecl):
@@ -633,7 +633,7 @@ class Interpreter:
 
         if isinstance(node, ServeStmt):
             from runtime.http import serve
-            serve(port=node.port)
+            serve(port=node.port, cors=node.cors)
             return None
 
         if isinstance(node, ThrowStmt):

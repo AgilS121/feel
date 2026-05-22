@@ -77,8 +77,15 @@ class FeelResponse:
         return self.status, ct or 'application/json; charset=utf-8', text.encode('utf-8')
 
 
-def _make_handler_class(registry, error_mapper, log_fn):
+def _make_handler_class(registry, error_mapper, log_fn, cors=False):
     """Create a BaseHTTPRequestHandler subclass bound to a registry."""
+
+    cors_headers = {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
+        'Access-Control-Max-Age': '86400',
+    } if cors else {}
 
     class _Handler(BaseHTTPRequestHandler):
         # silence default logging — we use our own
@@ -96,6 +103,17 @@ def _make_handler_class(registry, error_mapper, log_fn):
             headers = {k.lower(): v for k, v in self.headers.items()}
             content_length = int(headers.get('content-length', 0) or 0)
             body_raw = self.rfile.read(content_length) if content_length else b''
+
+            # CORS preflight: auto-answer OPTIONS for any path so browser
+            # can verify the actual request is allowed.
+            if cors and method == 'OPTIONS':
+                self.send_response(204)
+                for k, v in cors_headers.items():
+                    self.send_header(k, v)
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+                log_fn(method, path, 204, _time.time() - t_start)
+                return
 
             handler, info = registry.resolve(method, path)
 
@@ -123,6 +141,8 @@ def _make_handler_class(registry, error_mapper, log_fn):
             self.send_response(status)
             self.send_header('Content-Type', ctype)
             self.send_header('Content-Length', str(len(body_bytes)))
+            for k, v in cors_headers.items():
+                self.send_header(k, v)
             for k, v in resp.headers.items():
                 self.send_header(k, v)
             self.end_headers()
@@ -161,8 +181,12 @@ def _default_log(method, path, status, elapsed):
     print(msg, file=sys.stderr)
 
 
-def serve(port=3000, host='127.0.0.1', registry=None, error_mapper=None, log_fn=None):
-    """Start the HTTP server. Blocks until KeyboardInterrupt."""
+def serve(port=3000, host='127.0.0.1', registry=None, error_mapper=None, log_fn=None, cors=False):
+    """Start the HTTP server. Blocks until KeyboardInterrupt.
+
+    If cors=True, every response includes permissive CORS headers and
+    OPTIONS preflight requests are auto-answered with 204.
+    """
     from .router import global_registry
     if registry is None:
         registry = global_registry()
@@ -171,10 +195,11 @@ def serve(port=3000, host='127.0.0.1', registry=None, error_mapper=None, log_fn=
     if log_fn is None:
         log_fn = _default_log
 
-    handler_cls = _make_handler_class(registry, error_mapper, log_fn)
+    handler_cls = _make_handler_class(registry, error_mapper, log_fn, cors=cors)
     server = ThreadingHTTPServer((host, port), handler_cls)
     actual_port = server.server_address[1]
-    print(f'[feel] serving on http://{host}:{actual_port}', file=sys.stderr)
+    cors_note = ' (CORS enabled)' if cors else ''
+    print(f'[feel] serving on http://{host}:{actual_port}{cors_note}', file=sys.stderr)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
