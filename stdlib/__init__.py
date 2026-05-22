@@ -14,6 +14,7 @@ from . import crypto_mod
 from . import validate_mod
 from . import migrate_mod
 from . import auth_mod
+from . import cache_mod
 
 
 def install_into(env):
@@ -36,6 +37,7 @@ def install_into(env):
         ('migrate', migrate_mod.EXPORTS),
         ('auth', auth_mod.EXPORTS_AUTH),
         ('session', auth_mod.EXPORTS_SESSION),
+        ('cache', cache_mod.EXPORTS),
     ]:
         mod_env = Environment()
         for n, fn in mod_funcs.items():

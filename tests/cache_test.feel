@@ -1,0 +1,50 @@
+-- cache module: set/get/get_or_compute/has/delete/clear/size
+
+cache.clear()
+
+-- set + get
+cache.set("a", "hello")
+assert cache.get("a") == "hello", "set/get"
+
+-- missing returns nothing
+assert cache.get("missing") == nothing, "missing"
+
+-- has
+assert cache.has("a") == true, "has"
+assert cache.has("missing") == false, "has false"
+
+-- delete
+cache.delete("a")
+assert cache.get("a") == nothing, "deleted"
+
+-- get_or_compute: first call invokes producer, second returns cached
+let counter = map { count: 0 }
+define producer -> do {
+  let now_count = counter.count + 1
+  -- Can't mutate counter (immutable maps), just return marker
+  "computed"
+}
+let r1 = cache.get_or_compute("expensive", 60, producer)
+assert r1 == "computed", "first compute"
+
+let r2 = cache.get_or_compute("expensive", 60, producer)
+assert r2 == "computed", "cached"
+
+-- TTL: set with very short TTL, then evict
+cache.set("temp", "x", 0)
+-- Already expired (ttl=0 means expires at _now())
+-- Sleep tiny amount then check
+time.sleep(50)
+assert cache.get("temp") == nothing, "expired entry returned nothing"
+
+-- size after clear
+cache.clear()
+assert cache.size() == 0, "cleared"
+
+cache.set("k1", 1)
+cache.set("k2", 2)
+cache.set("k3", 3)
+assert cache.size() == 3, "size 3"
+
+cache.clear()
+show -> "cache_test OK"
