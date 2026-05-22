@@ -1,0 +1,36 @@
+-- Hello World
+show -> "Hello, World!"
+
+-- Variabel
+let name = "Budi"
+let age = 25
+show -> "Nama: {name}, Umur: {age}"
+
+-- Fungsi
+define greet taking name -> "Halo, {name}!"
+show -> greet("Feel")
+
+-- Pipeline
+define shout taking text -> uppercase(text)
+"feel language" | shout | show
+
+-- Kondisi
+when age > 18 -> show -> "Dewasa"
+otherwise -> show -> "Belum dewasa"
+
+-- Loop
+repeat 3 times -> show -> "Feel!"
+
+-- List
+let fruits = ["apel", "mangga", "jeruk"]
+for item in fruits -> show -> item
+
+-- Record
+record Person {
+  name: text
+  age: number
+}
+
+let budi = Person { name: "Budi", age: 25 }
+show -> budi.name
+show -> budi.age

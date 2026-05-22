@@ -1,0 +1,35 @@
+-- Feel compiler test
+
+-- Basic output
+show -> "Hello from compiled Feel!"
+
+-- Variables
+let name = "Budi"
+let age = 25
+show -> "Nama: {name}"
+show -> "Umur: {age}"
+
+-- Arithmetic
+let x = 10
+let y = 3
+let result = x * y + 2
+show -> result
+
+-- Function
+define double taking n -> n * 2
+show -> double(21)
+
+-- Pipeline
+define shout taking text -> uppercase(text)
+"feel language" | shout | show
+
+-- Condition
+when age > 18 -> show -> "Dewasa"
+otherwise -> show -> "Belum dewasa"
+
+-- Loop
+repeat 3 times -> show -> "Looping!"
+
+-- List
+let fruits = ["apel", "mangga", "jeruk"]
+for item in fruits -> show -> item
