@@ -37,6 +37,7 @@ from parser import (
     Literal, Ident, ArrowExpr, Pipeline, Lambda, Block,
     MapLiteral, ListLiteral, RecordDef, RecordLiteral,
     TryStmt, ThrowStmt, CatchStep,
+    RouteDecl, RespondExpr, ServeStmt, ToolDecl, AgentDecl,
 )
 from errors import FeelError
 
@@ -74,6 +75,56 @@ class GoEmitter:
     def _scope_pop(self):
         self.scopes.pop()
 
+    def _extract_path_params(self, pattern):
+        import re as _re
+        return _re.findall(r'\{(\w+)\}', pattern)
+
+    def _emit_route(self, n):
+        params = self._extract_path_params(n.path)
+        # Handler scope: request, body, query (magic vars) + path params
+        scope_names = ['request', 'body', 'query'] + params
+        self._scope_push(scope_names)
+        handler_expr = self._emit_expr(n.handler)
+        self._scope_pop()
+        bindings = ['request := scope["request"]; _ = request',
+                    'body := scope["body"]; _ = body',
+                    'query := scope["query"]; _ = query']
+        for p in params:
+            bindings.append(f'{_safe_name(p)} := scope["{_escape(p)}"]; _ = {_safe_name(p)}')
+        ind = self._ind()
+        joined = ('\n' + ind + '\t\t').join(bindings)
+        return [
+            f'{ind}feel_register_route("{n.method}", "{_escape(n.path)}", func(scope map[string]any) any {{',
+            f'{ind}\t\t{joined}',
+            f'{ind}\t\treturn {handler_expr}',
+            f'{ind}}})',
+        ]
+
+    def _emit_tool(self, n):
+        self._scope_add(n.name)
+        self._scope_push(n.params)
+        body_expr = self._emit_expr(n.body)
+        self._scope_pop()
+        params_go = ', '.join(f'{_safe_name(p)} any' for p in n.params)
+        params_list = ', '.join(f'"{_escape(p)}"' for p in n.params)
+        ind = self._ind()
+        return [
+            f'{ind}{_safe_name(n.name)} := feel_make_tool("{_escape(n.name)}", "{_escape(n.description)}", []string{{{params_list}}}, any(func({params_go}) any {{ return {body_expr} }}))',
+            f'{ind}_ = {_safe_name(n.name)}',
+        ]
+
+    def _emit_agent(self, n):
+        self._scope_add(n.name)
+        ind = self._ind()
+        config = n.config or {}
+        system = self._emit_expr(config['system']) if 'system' in config else 'any("")'
+        tools = self._emit_expr(config['tools']) if 'tools' in config else 'any([]any{})'
+        model = self._emit_expr(config['model']) if 'model' in config else 'any(nil)'
+        return [
+            f'{ind}{_safe_name(n.name)} := feel_make_agent("{_escape(n.name)}", {system}, {tools}, {model})',
+            f'{ind}_ = {_safe_name(n.name)}',
+        ]
+
     def emit_program(self, prog):
         body = []
         for stmt in prog.stmts:
@@ -95,6 +146,15 @@ class GoEmitter:
         if isinstance(n, TryStmt):
             # Statement-level try: discard result
             return [f'{self._ind()}_ = {self._emit_expr(n)}']
+        if isinstance(n, RouteDecl):
+            return self._emit_route(n)
+        if isinstance(n, ServeStmt):
+            cors = 'true' if n.cors else 'false'
+            return [f'{self._ind()}feel_serve_http({n.port}, {cors})']
+        if isinstance(n, ToolDecl):
+            return self._emit_tool(n)
+        if isinstance(n, AgentDecl):
+            return self._emit_agent(n)
         if isinstance(n, LetStmt):
             value = self._emit_expr(n.value)
             self._scope_add(n.name)
@@ -225,6 +285,11 @@ class GoEmitter:
             for k, v in n.fields.items():
                 entries.append(f'"{_escape(k)}": {self._emit_expr(v)}')
             return 'any(map[string]any{' + ', '.join(entries) + '})'
+
+        if isinstance(n, RespondExpr):
+            if n.body is None:
+                return f'any(feel_response{{status: {n.status}}})'
+            return f'any(feel_response{{status: {n.status}, body: {self._emit_expr(n.body)}}})'
         if isinstance(n, WhenStmt):
             # Expression form: ternary via IIFE
             cond = self._emit_expr(n.cond)
@@ -232,20 +297,27 @@ class GoEmitter:
             else_e = self._emit_expr(n.otherwise) if n.otherwise else 'any(nil)'
             return f'func() any {{ if feel_truthy({cond}) {{ return {then_e} }}; return {else_e} }}()'
         if isinstance(n, Block):
-            # Block expression: IIFE
+            # Block expression: IIFE with proper statement separators.
+            self._scope_push()
             lines = []
-            for s in n.stmts[:-1]:
-                lines.append('  ' + ' '.join(self._inline_stmt(s)))
-            last = n.stmts[-1] if n.stmts else None
+            stmts = n.stmts
+            for s in stmts[:-1]:
+                lines.append('; '.join(self._inline_stmt(s)))
+            last = stmts[-1] if stmts else None
+            stmt_types = (LetStmt, DefineStmt, ShowStmt, RepeatStmt, ForStmt,
+                          RouteDecl, ServeStmt, ToolDecl, AgentDecl)
             if last is None:
                 last_expr = 'any(nil)'
-            elif isinstance(last, (LetStmt, DefineStmt, ShowStmt, WhenStmt, RepeatStmt, ForStmt)):
-                # If last is a stmt, run it and return nil
-                lines.append('  ' + ' '.join(self._inline_stmt(last)))
+            elif isinstance(last, stmt_types):
+                lines.append('; '.join(self._inline_stmt(last)))
                 last_expr = 'any(nil)'
             else:
                 last_expr = self._emit_expr(last)
-            body = '; '.join(lines) + ('; ' if lines else '') + f'return {last_expr}'
+            self._scope_pop()
+            body = '; '.join(lines)
+            if body:
+                body += '; '
+            body += f'return {last_expr}'
             return f'func() any {{ {body} }}()'
         if isinstance(n, ListLiteral):
             items = ', '.join(self._emit_expr(i) for i in n.items)
@@ -277,12 +349,17 @@ class GoEmitter:
                                 hint='this construct is not yet supported by the Go transpiler')
 
     def _inline_stmt(self, n):
-        """Like _emit_stmt but for use inside an IIFE body (single statement, no leading indent)."""
+        """Like _emit_stmt but produces inline-able statement strings (no `\n`)."""
         if isinstance(n, LetStmt):
-            return [f'{_safe_name(n.name)} := any({self._emit_expr(n.value)})', f'_ = {_safe_name(n.name)}']
+            value = self._emit_expr(n.value)
+            self._scope_add(n.name)
+            return [f'{_safe_name(n.name)} := any({value})', f'_ = {_safe_name(n.name)}']
         if isinstance(n, DefineStmt):
-            params = ', '.join(f'{_safe_name(p)} any' for p in n.params)
+            self._scope_add(n.name)
+            self._scope_push(n.params)
             body = self._emit_expr(n.body)
+            self._scope_pop()
+            params = ', '.join(f'{_safe_name(p)} any' for p in n.params)
             return [f'{_safe_name(n.name)} := func({params}) any {{ return {body} }}', f'_ = {_safe_name(n.name)}']
         if isinstance(n, ShowStmt):
             return [f'feel_show({self._emit_expr(n.expr)})']
@@ -368,7 +445,7 @@ BUILTINS_GO = {
     'rest', 'push', 'join', 'split', 'contains',
 }
 
-STDLIB_MODULES = {'string', 'list', 'map', 'json'}
+STDLIB_MODULES = {'string', 'list', 'map', 'json', 'ai'}
 
 
 def _is_builtin(name):
@@ -404,15 +481,40 @@ def _as_stmt(node):
 RUNTIME_GO = r'''package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 // ---------- Runtime types ----------
 
 type feel_throw struct{ value any }
+
+type feel_route struct {
+	method  string
+	pattern string
+	regex   *regexp.Regexp
+	params  []string
+	handler func(map[string]any) any
+}
+
+var feel_routes []feel_route
+var feel_cors_enabled bool
+
+type feel_response struct {
+	status      int
+	body        any
+	contentType string
+	headers     map[string]string
+}
 
 // ---------- Runtime helpers ----------
 
@@ -595,6 +697,13 @@ func feel_field(obj any, name string) any {
 }
 
 func feel_call(fn any, args []any) any {
+	// Tools and agents are stored as map[string]any with __fn__ holding the
+	// real callable — unwrap and recurse.
+	if m, ok := fn.(map[string]any); ok {
+		if inner, ok := m["__fn__"]; ok {
+			return feel_call(inner, args)
+		}
+	}
 	// Reflection-light: support specific arities + variadic
 	switch f := fn.(type) {
 	case func() any:
@@ -1035,6 +1144,563 @@ func feel_from_jsonable(v any) any {
 	}
 	return v
 }
+
+// ---------- HTTP runtime ----------
+
+func feel_compile_pattern(pattern string) (*regexp.Regexp, []string) {
+	var params []string
+	var sb strings.Builder
+	sb.WriteString("^")
+	i := 0
+	for i < len(pattern) {
+		c := pattern[i]
+		if c == '{' {
+			end := strings.IndexByte(pattern[i:], '}')
+			if end == -1 {
+				panic(feel_throw{value: any("unclosed { in pattern: " + pattern)})
+			}
+			name := pattern[i+1 : i+end]
+			params = append(params, name)
+			sb.WriteString("(?P<")
+			sb.WriteString(name)
+			sb.WriteString(">[^/]+)")
+			i += end + 1
+		} else {
+			sb.WriteString(regexp.QuoteMeta(string(c)))
+			i++
+		}
+	}
+	sb.WriteString("$")
+	return regexp.MustCompile(sb.String()), params
+}
+
+func feel_register_route(method, pattern string, handler func(map[string]any) any) {
+	re, params := feel_compile_pattern(pattern)
+	feel_routes = append(feel_routes, feel_route{
+		method: strings.ToUpper(method), pattern: pattern, regex: re, params: params, handler: handler,
+	})
+}
+
+func feel_resolve_route(method, path string) (*feel_route, map[string]string, []string) {
+	pathMatched := false
+	var methodsForPath []string
+	method = strings.ToUpper(method)
+	for i := range feel_routes {
+		r := &feel_routes[i]
+		m := r.regex.FindStringSubmatch(path)
+		if m == nil {
+			continue
+		}
+		pathMatched = true
+		methodsForPath = append(methodsForPath, r.method)
+		if r.method == method {
+			captures := map[string]string{}
+			for idx, name := range r.regex.SubexpNames() {
+				if name != "" && idx < len(m) {
+					captures[name] = m[idx]
+				}
+			}
+			return r, captures, nil
+		}
+	}
+	if pathMatched {
+		return nil, nil, methodsForPath
+	}
+	return nil, nil, nil
+}
+
+func feel_response_from(v any) feel_response {
+	if r, ok := v.(feel_response); ok {
+		return r
+	}
+	return feel_response{status: 200, body: v}
+}
+
+func feel_encode_response(r feel_response) (int, string, []byte) {
+	ct := r.contentType
+	body := r.body
+	if body == nil {
+		if ct == "" {
+			ct = "text/plain"
+		}
+		return r.status, ct, []byte{}
+	}
+	if b, ok := body.([]byte); ok {
+		if ct == "" {
+			ct = "application/octet-stream"
+		}
+		return r.status, ct, b
+	}
+	if s, ok := body.(string); ok {
+		if ct == "" {
+			ct = "text/plain; charset=utf-8"
+		}
+		return r.status, ct, []byte(s)
+	}
+	clean := feel_to_jsonable(body)
+	data, err := json.Marshal(clean)
+	if err != nil {
+		return 500, "text/plain", []byte("json encode error: " + err.Error())
+	}
+	if ct == "" {
+		ct = "application/json; charset=utf-8"
+	}
+	return r.status, ct, data
+}
+
+func feel_dispatch(w http.ResponseWriter, r *http.Request) {
+	t0 := time.Now()
+	method := r.Method
+	path := r.URL.Path
+
+	corsHeaders := map[string]string{}
+	if feel_cors_enabled {
+		corsHeaders["Access-Control-Allow-Origin"] = "*"
+		corsHeaders["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS"
+		corsHeaders["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
+		corsHeaders["Access-Control-Max-Age"] = "86400"
+	}
+
+	// Preflight
+	if feel_cors_enabled && method == "OPTIONS" {
+		for k, v := range corsHeaders {
+			w.Header().Set(k, v)
+		}
+		w.WriteHeader(204)
+		fmt.Fprintf(os.Stderr, "OPTIONS %-40s -> 204  (%.1fms)\n", path, float64(time.Since(t0).Microseconds())/1000)
+		return
+	}
+
+	route, captures, methodsForPath := feel_resolve_route(method, path)
+
+	var resp feel_response
+	if route == nil && methodsForPath != nil {
+		resp = feel_response{
+			status: 405,
+			body: map[string]any{"error": any("method not allowed"), "allowed": feel_strings_to_anys(methodsForPath)},
+			headers: map[string]string{"Allow": strings.Join(methodsForPath, ", ")},
+		}
+	} else if route == nil {
+		resp = feel_response{status: 404, body: map[string]any{"error": any("not found"), "path": any(path)}}
+	} else {
+		// Build scope
+		query := map[string]any{}
+		for k, vs := range r.URL.Query() {
+			if len(vs) == 1 {
+				query[k] = any(vs[0])
+			} else {
+				items := make([]any, len(vs))
+				for i, v := range vs { items[i] = any(v) }
+				query[k] = any(items)
+			}
+		}
+		headers := map[string]any{}
+		for k, vs := range r.Header {
+			if len(vs) > 0 {
+				headers[strings.ToLower(k)] = any(vs[0])
+			}
+		}
+		bodyRaw, _ := io.ReadAll(r.Body)
+		var bodyDecoded any
+		if len(bodyRaw) > 0 {
+			ct := strings.ToLower(r.Header.Get("Content-Type"))
+			text := string(bodyRaw)
+			if strings.Contains(ct, "application/json") || strings.HasPrefix(strings.TrimSpace(text), "{") || strings.HasPrefix(strings.TrimSpace(text), "[") {
+				var decoded any
+				if err := json.Unmarshal(bodyRaw, &decoded); err == nil {
+					bodyDecoded = feel_from_jsonable(decoded)
+				} else {
+					bodyDecoded = any(text)
+				}
+			} else {
+				bodyDecoded = any(text)
+			}
+		}
+		request := map[string]any{
+			"method":  any(method),
+			"path":    any(path),
+			"query":   any(query),
+			"headers": any(headers),
+			"body":    bodyDecoded,
+		}
+		scope := map[string]any{
+			"request": any(request),
+			"body":    bodyDecoded,
+			"query":   any(query),
+		}
+		for k, v := range captures {
+			scope[k] = any(v)
+		}
+
+		func() {
+			defer func() {
+				if rec := recover(); rec != nil {
+					if ft, ok := rec.(feel_throw); ok {
+						resp = feel_response{status: 500, body: map[string]any{
+							"error": any("unhandled throw"), "value": any(feel_str(ft.value)),
+						}}
+					} else {
+						resp = feel_response{status: 500, body: map[string]any{
+							"error": any("internal server error"), "detail": any(fmt.Sprint(rec)),
+						}}
+					}
+				}
+			}()
+			raw := route.handler(scope)
+			resp = feel_response_from(raw)
+		}()
+	}
+
+	status, ctype, bodyBytes := feel_encode_response(resp)
+	w.Header().Set("Content-Type", ctype)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(bodyBytes)))
+	for k, v := range corsHeaders {
+		w.Header().Set(k, v)
+	}
+	for k, v := range resp.headers {
+		w.Header().Set(k, v)
+	}
+	w.WriteHeader(status)
+	w.Write(bodyBytes)
+	fmt.Fprintf(os.Stderr, "%-6s %-40s -> %d  (%.1fms)\n", method, path, status, float64(time.Since(t0).Microseconds())/1000)
+}
+
+func feel_strings_to_anys(xs []string) []any {
+	out := make([]any, len(xs))
+	for i, s := range xs {
+		out[i] = any(s)
+	}
+	return out
+}
+
+func feel_serve_http(port int, cors bool) {
+	feel_cors_enabled = cors
+	addr := fmt.Sprintf(":%d", port)
+	srv := &http.Server{Addr: addr, Handler: http.HandlerFunc(feel_dispatch)}
+	corsNote := ""
+	if cors {
+		corsNote = " (CORS enabled)"
+	}
+	fmt.Fprintf(os.Stderr, "[feel] serving on http://localhost%s%s\n", addr, corsNote)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		panic(feel_throw{value: any(err.Error())})
+	}
+}
+
+// ---------- AI runtime ----------
+
+func feel_ai_provider() string {
+	if p := os.Getenv("FEEL_AI_PROVIDER"); p != "" {
+		return strings.ToLower(p)
+	}
+	if os.Getenv("ANTHROPIC_API_KEY") != "" {
+		return "claude"
+	}
+	return "mock"
+}
+
+func feel_ai_model() string {
+	if m := os.Getenv("FEEL_AI_MODEL"); m != "" {
+		return m
+	}
+	return "claude-sonnet-4-6"
+}
+
+func feel_claude_call(messages []any, system string, model string) string {
+	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	if apiKey == "" {
+		panic(feel_throw{value: any("ANTHROPIC_API_KEY not set")})
+	}
+	if model == "" {
+		model = feel_ai_model()
+	}
+	payload := map[string]any{
+		"model":      model,
+		"max_tokens": 1024,
+		"messages":   messages,
+	}
+	if system != "" {
+		payload["system"] = system
+	}
+	data, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(data))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", apiKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		panic(feel_throw{value: any("Claude API error: " + err.Error())})
+	}
+	defer resp.Body.Close()
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		panic(feel_throw{value: any(fmt.Sprintf("Claude API %d: %s", resp.StatusCode, string(bodyBytes)))})
+	}
+	var body map[string]any
+	json.Unmarshal(bodyBytes, &body)
+	if content, ok := body["content"].([]any); ok {
+		for _, b := range content {
+			if blk, ok := b.(map[string]any); ok {
+				if blk["type"] == "text" {
+					if t, ok := blk["text"].(string); ok {
+						return t
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func feel_ai_ask(prompt any) any {
+	p := feel_ai_provider()
+	if p == "mock" {
+		snippet := feel_str(prompt)
+		if len(snippet) > 80 {
+			snippet = snippet[:80]
+		}
+		snippet = strings.ReplaceAll(snippet, "\n", " ")
+		return any(fmt.Sprintf("[mock-ai] response to: '%s'", snippet))
+	}
+	return any(feel_claude_call([]any{
+		map[string]any{"role": any("user"), "content": any(feel_str(prompt))},
+	}, "", ""))
+}
+
+func feel_ai_summarize(text any) any {
+	p := feel_ai_provider()
+	if p == "mock" {
+		s := feel_str(text)
+		words := strings.Fields(s)
+		head := words
+		if len(head) > 8 {
+			head = head[:8]
+		}
+		return any(fmt.Sprintf("[mock-summary] %d chars, starts: %s", len(s), strings.Join(head, " ")))
+	}
+	prompt := "Summarize the following text in 1-2 sentences:\n\n" + feel_str(text)
+	return any(feel_claude_call([]any{
+		map[string]any{"role": any("user"), "content": any(prompt)},
+	}, "", ""))
+}
+
+func feel_ai_classify(text, options any) any {
+	opts, _ := options.([]any)
+	if len(opts) == 0 {
+		panic(feel_throw{value: any("classify: options must be a non-empty list")})
+	}
+	p := feel_ai_provider()
+	if p == "mock" {
+		// Deterministic: hash-modulo
+		s := feel_str(text)
+		h := 0
+		for _, c := range s {
+			h = h*31 + int(c)
+		}
+		if h < 0 {
+			h = -h
+		}
+		return opts[h%len(opts)]
+	}
+	optStrs := make([]string, len(opts))
+	for i, o := range opts {
+		optStrs[i] = `"` + feel_str(o) + `"`
+	}
+	prompt := fmt.Sprintf(
+		"Classify the following text into exactly one of these categories: [%s].\n"+
+			"Respond with ONLY the category name, no explanation.\n\n"+
+			"Text: %s", strings.Join(optStrs, ", "), feel_str(text))
+	raw := feel_claude_call([]any{
+		map[string]any{"role": any("user"), "content": any(prompt)},
+	}, "", "")
+	answer := strings.Trim(strings.TrimSpace(raw), `"'`)
+	lower := strings.ToLower(answer)
+	for _, o := range opts {
+		os := strings.ToLower(feel_str(o))
+		if strings.HasPrefix(lower, os) || strings.Contains(lower, os) {
+			return o
+		}
+	}
+	return any(answer)
+}
+
+func feel_ai_chat(messages any, args ...any) any {
+	msgs, _ := messages.([]any)
+	system := ""
+	if len(args) >= 1 {
+		system = feel_str(args[0])
+	}
+	p := feel_ai_provider()
+	if p == "mock" {
+		// Find last user message
+		last := ""
+		for _, m := range msgs {
+			if mm, ok := m.(map[string]any); ok {
+				if mm["role"] == "user" || mm["role"] == any("user") {
+					last = feel_str(mm["content"])
+				}
+			}
+		}
+		if len(last) > 60 {
+			last = last[:60]
+		}
+		return any(fmt.Sprintf("[mock-chat] last user said: '%s'", last))
+	}
+	return any(feel_claude_call(msgs, system, ""))
+}
+
+var feel_ai_mod = map[string]any{
+	"ask":       any(feel_ai_ask),
+	"summarize": any(feel_ai_summarize),
+	"classify":  any(feel_ai_classify),
+	"chat":      any(func(args ...any) any { if len(args) == 0 { return any(nil) }; return feel_ai_chat(args[0], args[1:]...) }),
+	"provider":  any(func() any { return any(feel_ai_provider()) }),
+}
+
+// ---------- Agent / tool ----------
+
+func feel_make_tool(name, description string, params []string, fn any) any {
+	pany := make([]any, len(params))
+	for i, p := range params { pany[i] = any(p) }
+	return any(map[string]any{
+		"__type__":    any("tool"),
+		"__fn__":      fn,
+		"name":        any(name),
+		"description": any(description),
+		"parameters":  any(pany),
+	})
+}
+
+func feel_make_agent(name string, system any, tools any, model any) any {
+	toolList, _ := tools.([]any)
+	if toolList == nil { toolList = []any{} }
+	a := map[string]any{
+		"__type__": any("agent"),
+		"name":     any(name),
+		"system":   system,
+		"tools":    any(toolList),
+		"model":    model,
+	}
+	a["chat"] = any(func(message any) any {
+		return feel_agent_chat(a, message)
+	})
+	return any(a)
+}
+
+func feel_agent_chat(agent map[string]any, message any) any {
+	system := feel_str(agent["system"])
+	toolList, _ := agent["tools"].([]any)
+	msgs := []any{
+		map[string]any{"role": any("user"), "content": any(feel_str(message))},
+	}
+	p := feel_ai_provider()
+	if p == "mock" {
+		return any(fmt.Sprintf("[mock-agent] %d tools available. User said: '%s'", len(toolList), feel_str(message)))
+	}
+	// Claude tool-use loop
+	toolSchemas := []any{}
+	for _, t := range toolList {
+		if tm, ok := t.(map[string]any); ok {
+			params, _ := tm["parameters"].([]any)
+			props := map[string]any{}
+			required := []any{}
+			for _, p := range params {
+				ps := feel_str(p)
+				props[ps] = map[string]any{"type": any("string"), "description": any("parameter " + ps)}
+				required = append(required, any(ps))
+			}
+			toolSchemas = append(toolSchemas, map[string]any{
+				"name":        tm["name"],
+				"description": tm["description"],
+				"input_schema": map[string]any{
+					"type": any("object"), "properties": any(props), "required": any(required),
+				},
+			})
+		}
+	}
+	for iter := 0; iter < 8; iter++ {
+		payload := map[string]any{
+			"model":      feel_ai_model(),
+			"max_tokens": 1024,
+			"messages":   msgs,
+		}
+		if system != "" { payload["system"] = system }
+		if len(toolSchemas) > 0 { payload["tools"] = toolSchemas }
+		data, _ := json.Marshal(payload)
+		apiKey := os.Getenv("ANTHROPIC_API_KEY")
+		req, _ := http.NewRequest("POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(data))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-api-key", apiKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+		client := &http.Client{Timeout: 60 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			panic(feel_throw{value: any("Claude API error: " + err.Error())})
+		}
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			panic(feel_throw{value: any(fmt.Sprintf("Claude API %d: %s", resp.StatusCode, string(bodyBytes)))})
+		}
+		var body map[string]any
+		json.Unmarshal(bodyBytes, &body)
+		stop, _ := body["stop_reason"].(string)
+		content, _ := body["content"].([]any)
+		if stop != "tool_use" {
+			parts := []string{}
+			for _, b := range content {
+				if blk, ok := b.(map[string]any); ok {
+					if blk["type"] == "text" {
+						parts = append(parts, feel_str(blk["text"]))
+					}
+				}
+			}
+			return any(strings.TrimSpace(strings.Join(parts, "\n")))
+		}
+		msgs = append(msgs, map[string]any{"role": any("assistant"), "content": any(content)})
+		toolResults := []any{}
+		for _, b := range content {
+			blk, ok := b.(map[string]any)
+			if !ok || blk["type"] != "tool_use" { continue }
+			name := feel_str(blk["name"])
+			input, _ := blk["input"].(map[string]any)
+			useID := feel_str(blk["id"])
+			var result any
+			func() {
+				defer func() {
+					if rec := recover(); rec != nil {
+						result = any(fmt.Sprintf("tool error: %v", rec))
+					}
+				}()
+				for _, t := range toolList {
+					tm, _ := t.(map[string]any)
+					if tm == nil { continue }
+					if feel_str(tm["name"]) == name {
+						params, _ := tm["parameters"].([]any)
+						args := []any{}
+						for _, p := range params {
+							args = append(args, input[feel_str(p)])
+						}
+						fn := tm["__fn__"]
+						result = feel_call(fn, args)
+						return
+					}
+				}
+				result = any("unknown tool: " + name)
+			}()
+			toolResults = append(toolResults, map[string]any{
+				"type": any("tool_result"), "tool_use_id": any(useID), "content": any(feel_str(result)),
+			})
+		}
+		msgs = append(msgs, map[string]any{"role": any("user"), "content": any(toolResults)})
+	}
+	panic(feel_throw{value: any("agent chat: exceeded 8 tool-use iterations")})
+}
+
+// Silence unused-import warnings if a feature isn't exercised in user code.
+var _ = url.Parse
+var _ = bytes.NewReader
 '''
 
 
