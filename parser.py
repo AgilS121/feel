@@ -407,7 +407,7 @@ class Parser:
 
     def parse_repeat(self):
         t = self.advance()  # repeat
-        count = self.parse_primary()
+        count = self.parse_postfix()
         self.expect('TIMES', hint="count must be followed by 'times'")
         self.expect('ARROW')
         body = self.parse_expr()
@@ -417,7 +417,7 @@ class Parser:
         t = self.advance()  # for
         var = self.expect('IDENT').value
         self.expect('IN', hint="variable name must be followed by 'in'")
-        iterable = self.parse_primary()
+        iterable = self.parse_postfix()
         self.expect('ARROW')
         body = self.parse_expr()
         return _pos(ForStmt(var, iterable, body), t)

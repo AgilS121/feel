@@ -1,0 +1,49 @@
+-- Bank transfer demo — the canonical case for transactions.
+-- Without a transaction wrapper, a crash between debit and credit corrupts the database.
+-- With db.transaction, either both happen or neither does.
+
+let conn = db.connect("examples/bank.db")
+
+db.exec(conn, "CREATE TABLE IF NOT EXISTS accounts (id INTEGER PRIMARY KEY, owner TEXT UNIQUE, balance INTEGER)")
+db.exec(conn, "INSERT OR REPLACE INTO accounts (id, owner, balance) VALUES (1, 'Budi', 1000)")
+db.exec(conn, "INSERT OR REPLACE INTO accounts (id, owner, balance) VALUES (2, 'Siti', 500)")
+
+define show_balances -> do {
+  for row in db.query(conn, "SELECT owner, balance FROM accounts ORDER BY id") ->
+    show -> "  {row.owner}: {row.balance}"
+  nothing
+}
+
+show -> "Initial state:"
+show_balances()
+
+-- Transfer 200 from Budi to Siti, atomically.
+define transfer taking from_owner, to_owner, amount ->
+  db.transaction(conn, fn tx -> do {
+    let sender = db.query_one(tx, "SELECT balance FROM accounts WHERE owner = ?", [from_owner])
+    when sender == nothing -> throw "account not found: {from_owner}" otherwise -> nothing
+    when sender.balance < amount -> throw "insufficient funds for {from_owner}" otherwise -> nothing
+
+    db.exec(tx, "UPDATE accounts SET balance = balance - ? WHERE owner = ?", [amount, from_owner])
+    db.exec(tx, "UPDATE accounts SET balance = balance + ? WHERE owner = ?", [amount, to_owner])
+    "transferred {amount} from {from_owner} to {to_owner}"
+  })
+
+-- Successful transfer
+let r1 = transfer("Budi", "Siti", 200)
+show -> ""
+show -> r1
+show_balances()
+
+-- Failed transfer: insufficient funds → rollback
+let r2 = try transfer("Siti", "Budi", 9999) catch err -> "blocked: {err}"
+show -> ""
+show -> r2
+show -> "Balances after failed transfer (unchanged):"
+show_balances()
+
+-- Clean up so the example is re-runnable
+db.close(conn)
+file.delete("examples/bank.db")
+show -> ""
+show -> "bank_transfer demo OK"

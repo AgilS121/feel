@@ -1,0 +1,54 @@
+-- Transactions: db.begin/commit/rollback + db.transaction block.
+
+let conn = db.connect(":memory:")
+db.exec(conn, "CREATE TABLE accounts (id INTEGER PRIMARY KEY, owner TEXT, balance INTEGER)")
+db.exec(conn, "INSERT INTO accounts (owner, balance) VALUES (?, ?)", ["Budi", 1000])
+db.exec(conn, "INSERT INTO accounts (owner, balance) VALUES (?, ?)", ["Siti", 500])
+
+-- 1. Manual begin/commit — successful transfer
+db.begin(conn)
+db.exec(conn, "UPDATE accounts SET balance = balance - ? WHERE owner = ?", [200, "Budi"])
+db.exec(conn, "UPDATE accounts SET balance = balance + ? WHERE owner = ?", [200, "Siti"])
+db.commit(conn)
+
+let budi = db.query_one(conn, "SELECT balance FROM accounts WHERE owner = ?", ["Budi"])
+let siti = db.query_one(conn, "SELECT balance FROM accounts WHERE owner = ?", ["Siti"])
+assert budi.balance == 800, "commit applied — Budi 1000-200=800"
+assert siti.balance == 700, "commit applied — Siti 500+200=700"
+
+-- 2. Manual begin/rollback — undo
+db.begin(conn)
+db.exec(conn, "UPDATE accounts SET balance = balance - ? WHERE owner = ?", [9999, "Budi"])
+db.rollback(conn)
+
+let budi_after_rollback = db.query_one(conn, "SELECT balance FROM accounts WHERE owner = ?", ["Budi"])
+assert budi_after_rollback.balance == 800, "rollback undid the change"
+
+-- 3. db.transaction block — commits on success
+let result = db.transaction(conn, fn tx -> do {
+  db.exec(tx, "UPDATE accounts SET balance = balance - ? WHERE owner = ?", [50, "Budi"])
+  db.exec(tx, "UPDATE accounts SET balance = balance + ? WHERE owner = ?", [50, "Siti"])
+  "transfer ok"
+})
+assert result == "transfer ok", "transaction returns block value"
+
+let budi_after_tx = db.query_one(conn, "SELECT balance FROM accounts WHERE owner = ?", ["Budi"])
+assert budi_after_tx.balance == 750, "transaction committed"
+
+-- 4. db.transaction block — auto-rollback on throw
+let outcome = try db.transaction(conn, fn tx -> do {
+  db.exec(tx, "UPDATE accounts SET balance = balance - ? WHERE owner = ?", [100, "Budi"])
+  throw "simulated failure"
+}) catch err -> "caught: {err}"
+
+assert outcome == "caught: simulated failure", "throw was propagated"
+
+let budi_after_throw = db.query_one(conn, "SELECT balance FROM accounts WHERE owner = ?", ["Budi"])
+assert budi_after_throw.balance == 750, "transaction rolled back on throw"
+
+-- 5. Nested operations OK
+let total_before = db.query_one(conn, "SELECT SUM(balance) AS t FROM accounts")
+assert total_before.t == 1500, "money conserved: 800-50+500+50 = 750+750 = 1500"
+
+db.close(conn)
+show -> "db_transaction_test OK"
