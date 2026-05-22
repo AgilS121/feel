@@ -1,0 +1,38 @@
+-- M4-D: db.* compiles to Go (modernc.org/sqlite, pure-Go, no CGO).
+
+let conn = db.connect(":memory:")
+db.exec(conn, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
+
+db.exec(conn, "INSERT INTO users (name, age) VALUES (?, ?)", ["Budi", 25])
+db.exec(conn, "INSERT INTO users (name, age) VALUES (?, ?)", ["Siti", 30])
+db.exec(conn, "INSERT INTO users (name, age) VALUES (?, ?)", ["Ana", 22])
+
+show -> "Last inserted ID: {db.last_id(conn)}"
+
+let all = db.query(conn, "SELECT id, name, age FROM users ORDER BY id")
+show -> "Total: {length(all)}"
+for u in all -> show -> "  [{u.id}] {u.name} ({u.age})"
+
+let budi = db.query_one(conn, "SELECT * FROM users WHERE name = ?", ["Budi"])
+show -> "Found: {budi.name}, age {budi.age}"
+
+-- Transaction commit
+db.transaction(conn, fn tx -> do {
+  db.exec(tx, "UPDATE users SET age = age + 1 WHERE name = ?", ["Budi"])
+  db.exec(tx, "UPDATE users SET age = age + 1 WHERE name = ?", ["Siti"])
+})
+let updated = db.query_one(conn, "SELECT age FROM users WHERE name = ?", ["Budi"])
+show -> "After tx: Budi age = {updated.age}"
+
+-- Transaction rollback (via throw)
+let outcome = try db.transaction(conn, fn tx -> do {
+  db.exec(tx, "UPDATE users SET age = 999 WHERE name = ?", ["Ana"])
+  throw "simulated failure"
+}) catch err -> "caught: {err}"
+show -> outcome
+
+let ana = db.query_one(conn, "SELECT age FROM users WHERE name = ?", ["Ana"])
+show -> "After rollback: Ana age = {ana.age}"
+
+db.close(conn)
+show -> "m4d_db OK"

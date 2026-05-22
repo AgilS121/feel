@@ -52,6 +52,8 @@ class GoEmitter:
         self.depth = 0
         self.var_counter = 0
         self.scopes = [set()]   # stack of sets of bound names
+        self.uses_db = False    # tracked so build_feel can decide whether to
+                                # add modernc.org/sqlite to go.mod
 
     def _ind(self):
         return INDENT * self.depth
@@ -221,6 +223,8 @@ class GoEmitter:
                 return _safe_name(n.name)
             # Stdlib namespace modules → emit the Go map.
             if n.name in STDLIB_MODULES:
+                if n.name == 'db':
+                    self.uses_db = True
                 return f'feel_{n.name}_mod'
             # Builtin used as a value (e.g. in a pipeline) → emit the wrapper.
             if n.name == 'show':
@@ -445,7 +449,7 @@ BUILTINS_GO = {
     'rest', 'push', 'join', 'split', 'contains',
 }
 
-STDLIB_MODULES = {'string', 'list', 'map', 'json', 'ai'}
+STDLIB_MODULES = {'string', 'list', 'map', 'json', 'ai', 'db'}
 
 
 def _is_builtin(name):
@@ -1704,18 +1708,241 @@ var _ = bytes.NewReader
 '''
 
 
+RUNTIME_GO_DB_IMPORTS = '"database/sql"\n\t"sync"\n\t_ "modernc.org/sqlite"\n'
+
+RUNTIME_GO_DB_BODY = r'''
+// ---------- db runtime (M4-D) ----------
+// Pure-Go SQLite via modernc.org/sqlite (no CGO).
+
+var feel_db_last_ids sync.Map   // *sql.DB -> int64
+
+func feel_db_unwrap(conn any) *sql.DB {
+	if db, ok := conn.(*sql.DB); ok {
+		return db
+	}
+	panic(feel_throw{value: any("db: not a connection")})
+}
+
+func feel_db_params(raw any) []any {
+	if raw == nil {
+		return nil
+	}
+	if l, ok := raw.([]any); ok {
+		out := make([]any, len(l))
+		for i, v := range l {
+			switch x := v.(type) {
+			case float64:
+				if x == float64(int64(x)) {
+					out[i] = int64(x)
+				} else {
+					out[i] = x
+				}
+			default:
+				out[i] = v
+			}
+		}
+		return out
+	}
+	panic(feel_throw{value: any("db params must be a list")})
+}
+
+func feel_db_normalize(v any) any {
+	switch x := v.(type) {
+	case nil:
+		return any(nil)
+	case int64:
+		return any(float64(x))
+	case []byte:
+		return any(string(x))
+	}
+	return v
+}
+
+func feel_db_connect(args ...any) any {
+	path := feel_str(args[0])
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		panic(feel_throw{value: any("db.connect: " + err.Error())})
+	}
+	if err := db.Ping(); err != nil {
+		panic(feel_throw{value: any("db.connect ping: " + err.Error())})
+	}
+	return any(db)
+}
+
+func feel_db_exec(args ...any) any {
+	db := feel_db_unwrap(args[0])
+	sqlText := feel_str(args[1])
+	var params []any
+	if len(args) >= 3 {
+		params = feel_db_params(args[2])
+	}
+	result, err := db.Exec(sqlText, params...)
+	if err != nil {
+		panic(feel_throw{value: any("db.exec: " + err.Error())})
+	}
+	if id, err := result.LastInsertId(); err == nil {
+		feel_db_last_ids.Store(db, id)
+	}
+	affected, _ := result.RowsAffected()
+	return any(float64(affected))
+}
+
+func feel_db_query(args ...any) any {
+	db := feel_db_unwrap(args[0])
+	sqlText := feel_str(args[1])
+	var params []any
+	if len(args) >= 3 {
+		params = feel_db_params(args[2])
+	}
+	rows, err := db.Query(sqlText, params...)
+	if err != nil {
+		panic(feel_throw{value: any("db.query: " + err.Error())})
+	}
+	defer rows.Close()
+	cols, _ := rows.Columns()
+	out := []any{}
+	for rows.Next() {
+		vals := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			panic(feel_throw{value: any("db.query scan: " + err.Error())})
+		}
+		row := map[string]any{}
+		for i, c := range cols {
+			row[c] = feel_db_normalize(vals[i])
+		}
+		out = append(out, any(row))
+	}
+	return any(out)
+}
+
+func feel_db_query_one(args ...any) any {
+	list, _ := feel_db_query(args...).([]any)
+	if len(list) > 0 {
+		return list[0]
+	}
+	return any(nil)
+}
+
+func feel_db_close(conn any) any {
+	if db, ok := conn.(*sql.DB); ok {
+		db.Close()
+		feel_db_last_ids.Delete(db)
+	}
+	return any(true)
+}
+
+func feel_db_last_id(conn any) any {
+	db := feel_db_unwrap(conn)
+	if v, ok := feel_db_last_ids.Load(db); ok {
+		return any(float64(v.(int64)))
+	}
+	return any(float64(0))
+}
+
+func feel_db_begin(conn any) any {
+	feel_db_exec(conn, any("BEGIN"))
+	return any(true)
+}
+
+func feel_db_commit(conn any) any {
+	feel_db_exec(conn, any("COMMIT"))
+	return any(true)
+}
+
+func feel_db_rollback(conn any) any {
+	feel_db_exec(conn, any("ROLLBACK"))
+	return any(true)
+}
+
+func feel_db_transaction(conn, fn any) any {
+	feel_db_begin(conn)
+	var result any
+	committed := false
+	defer func() {
+		if r := recover(); r != nil {
+			if !committed {
+				func() {
+					defer func() { recover() }()
+					feel_db_rollback(conn)
+				}()
+			}
+			panic(r)
+		}
+	}()
+	result = feel_call(fn, []any{conn})
+	feel_db_commit(conn)
+	committed = true
+	return result
+}
+
+var feel_db_mod = map[string]any{
+	"connect":     any(feel_db_connect),
+	"exec":        any(feel_db_exec),
+	"query":       any(feel_db_query),
+	"query_one":   any(feel_db_query_one),
+	"close":       any(feel_db_close),
+	"last_id":     any(feel_db_last_id),
+	"begin":       any(feel_db_begin),
+	"commit":      any(feel_db_commit),
+	"rollback":    any(feel_db_rollback),
+	"transaction": any(feel_db_transaction),
+}
+'''
+
+
+GO_MOD_TEMPLATE = '''module feel-app
+
+go 1.21
+'''
+
+GO_MOD_TEMPLATE_WITH_SQLITE = '''module feel-app
+
+go 1.21
+
+require modernc.org/sqlite v1.34.4
+'''
+
+
 def compile_to_go(source, filename='<input>'):
-    """Return Go source string for the given Feel source."""
+    """Return (Go source, uses_db) for the given Feel source."""
     tree = parse(source, filename=filename)
     emitter = GoEmitter()
     emitter.depth = 1  # inside main()
     body = emitter.emit_program(tree)
 
-    return RUNTIME_GO + '\nfunc main() {\n' + body + '\n}\n'
+    runtime = RUNTIME_GO
+    if emitter.uses_db:
+        # Inject sqlite imports into the import block.
+        runtime = runtime.replace(
+            '"time"\n)',
+            '"time"\n\t' + RUNTIME_GO_DB_IMPORTS + ')',
+            1,
+        )
+        # Append db helpers + module map BEFORE the final closing ''' (raw string).
+        # We split on the trailing var _ = ... lines and re-attach.
+        marker = "var _ = bytes.NewReader"
+        if marker in runtime:
+            head, tail = runtime.rsplit(marker, 1)
+            runtime = head + marker + tail + RUNTIME_GO_DB_BODY
+        else:
+            runtime = runtime + RUNTIME_GO_DB_BODY
+
+    go_src = runtime + '\nfunc main() {\n' + body + '\n}\n'
+    return go_src, emitter.uses_db
 
 
 def build_feel(feel_path, out_path=None, keep_go=False):
     """Compile a Feel file → Go → native binary via `go build`.
+
+    If the program uses `db.*`, a go.mod is generated requiring
+    modernc.org/sqlite (pure-Go driver) and `go mod tidy` is run before
+    `go build`. First build with sqlite downloads ~5MB to the module cache;
+    subsequent builds are fast.
 
     Returns (ok: bool, message: str).
     """
@@ -1725,32 +1952,46 @@ def build_feel(feel_path, out_path=None, keep_go=False):
 
     with open(feel_path, encoding='utf-8') as f:
         src = f.read()
-    go_src = compile_to_go(src, filename=feel_path)
+    go_src, uses_db = compile_to_go(src, filename=feel_path)
 
     # Output paths
     base = os.path.splitext(os.path.basename(feel_path))[0]
     if out_path is None:
         out_path = base + ('.exe' if os.name == 'nt' else '')
 
-    # Write Go to a temp dir as main.go (Go requires main package files)
     tmpdir = tempfile.mkdtemp(prefix='feel_build_')
     go_file = os.path.join(tmpdir, 'main.go')
     with open(go_file, 'w', encoding='utf-8') as f:
         f.write(go_src)
 
+    # Write a go.mod (module-aware build is required for external deps)
+    gomod_path = os.path.join(tmpdir, 'go.mod')
+    with open(gomod_path, 'w', encoding='utf-8') as f:
+        f.write(GO_MOD_TEMPLATE_WITH_SQLITE if uses_db else GO_MOD_TEMPLATE)
+
     abs_out = os.path.abspath(out_path)
     try:
+        if uses_db:
+            tidy = subprocess.run(
+                ['go', 'mod', 'tidy'],
+                cwd=tmpdir,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            if tidy.returncode != 0:
+                return False, f"go mod tidy failed:\n{tidy.stderr}\n\n-- workdir: {tmpdir} --"
         result = subprocess.run(
-            ['go', 'build', '-o', abs_out, 'main.go'],
+            ['go', 'build', '-o', abs_out, '.'],
             cwd=tmpdir,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=300,
         )
     except FileNotFoundError:
         return False, "go toolchain not found in PATH (install Go from https://go.dev)"
     except subprocess.TimeoutExpired:
-        return False, "go build timed out (>120s)"
+        return False, "go build timed out (>5min)"
 
     if keep_go:
         kept = os.path.splitext(out_path)[0] + '.go'
@@ -1760,10 +2001,13 @@ def build_feel(feel_path, out_path=None, keep_go=False):
     if result.returncode != 0:
         return False, f"go build failed:\n{result.stderr}\n\n-- generated Go saved at {go_file} --"
 
-    # Cleanup tmpdir only if not keep
     if not keep_go:
         try:
             os.remove(go_file)
+            os.remove(gomod_path)
+            sumf = os.path.join(tmpdir, 'go.sum')
+            if os.path.exists(sumf):
+                os.remove(sumf)
             os.rmdir(tmpdir)
         except OSError:
             pass
