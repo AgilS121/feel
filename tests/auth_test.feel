@@ -1,0 +1,50 @@
+-- Auth and session helpers.
+
+let secret = "test-secret-key"
+
+-- extract_bearer: pulls token from "Authorization: Bearer X"
+let req_with_token = map {
+  headers: map { authorization: "Bearer abc.def.ghi" }
+}
+assert auth.extract_bearer(req_with_token) == "abc.def.ghi", "extract bearer"
+
+let req_no_token = map { headers: map {} }
+assert auth.extract_bearer(req_no_token) == nothing, "missing token"
+
+-- require_jwt round-trip
+let token = crypto.jwt_sign(map { sub: "user:1", role: "user" }, secret)
+let auth_req = map { headers: map { authorization: "Bearer {token}" } }
+let payload = auth.require_jwt(auth_req, secret)
+assert payload.sub == "user:1", "jwt payload"
+
+-- require_jwt with wrong secret throws
+let bad = try auth.require_jwt(auth_req, "wrong") catch err -> err
+assert contains(bad, "invalid"), "wrong secret rejected"
+
+-- optional_jwt returns nothing on missing
+assert auth.optional_jwt(req_no_token, secret) == nothing, "optional handles missing"
+
+-- session.set + session.get round-trip
+let resp = map { status: 200 }
+let with_cookie = session.set(resp, "sid", "user-42", secret)
+-- with_cookie now has __cookies__ list with one Set-Cookie header
+
+-- Simulate the request side: cookie header contains the signed cookie value
+-- (extract value from the Set-Cookie we just produced)
+let cookie_header = with_cookie["__cookies__"][0]
+-- cookie_header is "sid=<signed>; Path=/; ..."
+let parts = split(cookie_header, ";")
+let kv = parts[0]
+let req_with_cookie = map { headers: map { cookie: kv } }
+
+let recovered = session.get(req_with_cookie, "sid", secret)
+assert recovered == "user-42", "session roundtrip"
+
+-- Wrong secret → nothing
+assert session.get(req_with_cookie, "sid", "wrong-secret") == nothing, "wrong secret blocks session"
+
+-- Tampered cookie → nothing
+let tampered_req = map { headers: map { cookie: "sid=evil.evilsig" } }
+assert session.get(tampered_req, "sid", secret) == nothing, "tampered cookie blocked"
+
+show -> "auth_test OK"

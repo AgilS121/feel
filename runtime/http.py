@@ -156,6 +156,14 @@ def _make_handler_class(registry, error_mapper, log_fn, cors=False):
                     )
                     raw = handler(request)
                     resp = FeelResponse.from_handler_return(raw)
+                    # Extract session cookies (stuffed by session.set / session.clear)
+                    if isinstance(resp.body, dict) and '__cookies__' in resp.body:
+                        cookies = resp.body.pop('__cookies__')
+                        # We can only set one Set-Cookie via send_header per call, so
+                        # accumulate them in resp.headers under unique keys; the writer
+                        # below iterates resp.headers in order.
+                        for i, c in enumerate(cookies):
+                            resp.headers[f'Set-Cookie__{i}'] = c
             except Exception as exc:
                 resp = error_mapper(exc)
 
@@ -166,7 +174,9 @@ def _make_handler_class(registry, error_mapper, log_fn, cors=False):
             for k, v in cors_headers.items():
                 self.send_header(k, v)
             for k, v in resp.headers.items():
-                self.send_header(k, v)
+                # Allow multiple Set-Cookie via __i suffix
+                actual_name = 'Set-Cookie' if k.startswith('Set-Cookie__') else k
+                self.send_header(actual_name, v)
             self.end_headers()
             self.wfile.write(body_bytes)
 
