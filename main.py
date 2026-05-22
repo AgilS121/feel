@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 import sys
 import os
+import time
 
-# Pastikan UTF-8 di Windows (banner & error messages pakai box-drawing + emoji)
+# Ensure UTF-8 on Windows (banner uses box-drawing characters)
 if hasattr(sys.stdout, 'reconfigure'):
     try:
         sys.stdout.reconfigure(encoding='utf-8')
@@ -14,36 +15,14 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from interpreter import Interpreter, run_file
 from errors import FeelError, FeelThrow
-
-BANNER = """
-  ███████╗███████╗███████╗██╗
-  ██╔════╝██╔════╝██╔════╝██║
-  █████╗  █████╗  █████╗  ██║
-  ██╔══╝  ██╔══╝  ██╔══╝  ██║
-  ██║     ███████╗███████╗███████╗
-  ╚═╝     ╚══════╝╚══════╝╚══════╝
-  Feel v0.2  — code that flows
-"""
-
-USAGE = """Usage:
-  python main.py                              interactive REPL
-  python main.py file.feel                    run a file
-  python main.py test [tests_dir]             run the test suite
-  python main.py fmt FILE                     print canonical formatted source
-  python main.py fmt --write FILE             rewrite FILE in canonical form
-  python main.py fmt --check FILE [FILE...]   exit 1 if any file is not formatted
-  python main.py build file.feel              transpile to Go and build native binary (M4)
-  python main.py build file.feel -o NAME      build with given output name
-  python main.py build file.feel --keep-go    keep the intermediate .go file
-  python main.py --compile file.feel          (legacy) compile to a binary via C
-"""
+import cli
 
 
 _OPEN_BRACKETS = {'{': '}', '(': ')', '[': ']'}
 
 
 def _needs_continuation(buf):
-    """Cek apakah buffer Feel tidak lengkap (open brace/paren, trailing |/->)."""
+    """True if buffer has unclosed brackets or trailing '|'/'->'."""
     stack = []
     in_string = False
     in_comment = False
@@ -72,7 +51,6 @@ def _needs_continuation(buf):
         i += 1
     if stack:
         return True
-    # cek trailing operator: | atau ->
     stripped = buf.rstrip()
     if stripped.endswith('|') or stripped.endswith('->'):
         return True
@@ -80,10 +58,10 @@ def _needs_continuation(buf):
 
 
 def repl():
-    print(BANNER)
-    print('Type Feel code. Type "exit" to quit.\n')
+    cli.print_banner()
+    print(f'  {cli.dim("Type Feel code below. .help for commands. .exit or Ctrl+D to quit.")}')
+    print()
 
-    # readline untuk history
     try:
         import readline  # noqa: F401
     except ImportError:
@@ -94,30 +72,48 @@ def repl():
 
     interp = Interpreter(filename='<repl>')
     buf = ''
+    prompt_main = cli.bold_cyan('feel') + cli.dim(' › ')
+    prompt_cont = cli.dim('    › ')
+
     while True:
         try:
-            prompt = 'feel> ' if not buf else '....> '
+            prompt = prompt_main if not buf else prompt_cont
             line = input(prompt)
-            if not buf and line.strip() in ('exit', 'quit'):
+            stripped = line.strip()
+
+            # REPL meta-commands
+            if not buf and stripped in ('.exit', '.quit', 'exit', 'quit'):
                 break
-            if not line.strip() and not buf:
+            if not buf and stripped == '.help':
+                print()
+                print(f'  {cli.bold("REPL commands:")}')
+                print(f'    {cli.green(".help")}   show this list')
+                print(f'    {cli.green(".clear")}  start a fresh interpreter')
+                print(f'    {cli.green(".exit")}   quit')
+                print()
+                print(f'  Type any Feel expression or statement. Multi-line blocks')
+                print(f'  ({{ }}, do-blocks, dangling | or ->) auto-continue.')
+                print()
                 continue
+            if not buf and stripped == '.clear':
+                interp = Interpreter(filename='<repl>')
+                cli.info('interpreter reset')
+                continue
+            if not stripped and not buf:
+                continue
+
             buf = (buf + '\n' + line) if buf else line
             if _needs_continuation(buf):
                 continue
             try:
-                # tampilkan hasil ekspresi terakhir (jika bukan stmt yang sudah print sendiri)
-                result = interp.run(buf)
-                if result is not None and not buf.lstrip().startswith('show'):
-                    # auto-display kalau bukan show stmt yang sudah print
-                    pass  # disable auto-print supaya tidak duplicate
+                interp.run(buf)
             except FeelError as e:
                 print(str(e))
             except FeelThrow as ft:
-                print(f"Uncaught throw: {ft.value}")
+                print(f"{cli.red('uncaught throw:')} {ft.value}")
             buf = ''
         except KeyboardInterrupt:
-            print('\nCancelled')
+            print(f'\n{cli.dim("cancelled")}')
             buf = ''
             continue
         except EOFError:
@@ -126,34 +122,36 @@ def repl():
 
 
 def run_tests(tests_dir='tests'):
-    """Jalankan semua *_test.feel di folder tests/."""
+    """Run all *_test.feel under DIR with polished output."""
     import glob
     if not os.path.isdir(tests_dir):
-        print(f"Test directory not found: {tests_dir}")
+        cli.error(f"test directory not found: {tests_dir}")
         return 1
     files = sorted(glob.glob(os.path.join(tests_dir, '*_test.feel')))
     if not files:
-        print(f"No *_test.feel files in {tests_dir}")
+        cli.error(f"no *_test.feel files in {tests_dir}")
         return 1
+
+    cli.test_header(len(files))
     passed = 0
     failed = 0
+    t0 = time.time()
     for f in files:
         name = os.path.basename(f)
         try:
             run_file(f)
-            print(f"  PASS  {name}")
+            cli.test_pass(name)
             passed += 1
         except FeelError as e:
-            print(f"  FAIL  {name}")
-            print(str(e))
+            cli.test_fail(name, detail=str(e))
             failed += 1
         except FeelThrow as ft:
-            print(f"  FAIL  {name}  (uncaught throw: {ft.value})")
+            cli.test_fail(name, detail=f'uncaught throw: {ft.value}')
             failed += 1
         except Exception as e:
-            print(f"  FAIL  {name}  (unexpected: {e})")
+            cli.test_fail(name, detail=f'unexpected: {e}')
             failed += 1
-    print(f"\n{passed} passed, {failed} failed out of {len(files)} tests.")
+    cli.test_summary(passed, failed, time.time() - t0)
     return 0 if failed == 0 else 1
 
 
@@ -172,28 +170,40 @@ def run_build(args):
         if a == '--keep-go':
             keep_go = True; i += 1; continue
         if a.startswith('-'):
-            print(f"build: unknown flag {a!r}")
+            cli.error(f"build: unknown flag {a!r}")
             return 1
         if feel_path is None:
             feel_path = a
         i += 1
 
     if feel_path is None:
-        print("build: missing input .feel file")
+        cli.error("build: missing input .feel file")
         return 1
     if not os.path.exists(feel_path):
-        print(f"build: file not found: {feel_path}")
+        cli.error(f"build: file not found: {feel_path}")
         return 1
 
+    print()
+    cli.build_step(f'Compiling {cli.bold(os.path.basename(feel_path))} → Go')
+    t0 = time.time()
     try:
         ok, msg = build_feel(feel_path, out_path=out_path, keep_go=keep_go)
     except FeelError as e:
-        print(str(e), file=sys.stderr)
+        cli.build_failed(str(e))
         return 1
+    elapsed = time.time() - t0
     if not ok:
-        print(msg, file=sys.stderr)
+        cli.build_failed(msg)
         return 1
-    print(msg)
+    actual = out_path or (os.path.splitext(os.path.basename(feel_path))[0] +
+                          ('.exe' if os.name == 'nt' else ''))
+    try:
+        size = os.path.getsize(actual)
+        size_mb = size / (1024 * 1024)
+        cli.build_step(f'Linked native binary', ok=True, detail=f'{size_mb:.1f} MB')
+    except OSError:
+        cli.build_step('Linked native binary', ok=True)
+    cli.build_done(actual, elapsed)
     return 0
 
 
@@ -212,14 +222,13 @@ def run_fmt(args):
         elif a == '--check':
             check = True
         elif a.startswith('-'):
-            print(f"fmt: unknown flag {a!r}")
+            cli.error(f"fmt: unknown flag {a!r}")
             return 1
         else:
             files.append(a)
         i += 1
 
     if not files:
-        # Read stdin, print to stdout
         src = sys.stdin.read()
         try:
             print(format_source(src), end='')
@@ -229,9 +238,10 @@ def run_fmt(args):
         return 0
 
     not_formatted = []
+    changed = []
     for f in files:
         if not os.path.exists(f):
-            print(f"fmt: file not found: {f}", file=sys.stderr)
+            cli.error(f"fmt: file not found: {f}")
             return 1
         try:
             if check:
@@ -239,20 +249,38 @@ def run_fmt(args):
                 if not ok:
                     not_formatted.append(f)
             elif write:
-                format_file(f, write=True)
+                with open(f, encoding='utf-8') as fh:
+                    before = fh.read()
+                _, out = format_file(f, write=True)
+                if before != out:
+                    changed.append(f)
             else:
                 _, out = format_file(f)
                 print(out, end='')
         except FeelError as e:
-            print(f"fmt: {f}: {e}", file=sys.stderr)
+            cli.error(f"fmt: {f}: {e}")
             return 1
 
     if check:
         if not_formatted:
+            print()
             for f in not_formatted:
-                print(f"fmt: not formatted: {f}", file=sys.stderr)
+                print(f'  {cli.red("not formatted")}  {f}')
+            print()
+            print(f'  {cli.dim(str(len(not_formatted)) + " file(s) need formatting. Run: feel fmt --write <file>")}')
             return 1
+        cli.success(f'all {len(files)} file(s) are canonically formatted')
         return 0
+
+    if write:
+        if changed:
+            print()
+            for f in changed:
+                print(f'  {cli.green("formatted")}  {f}')
+            print()
+            print(f'  {cli.dim(str(len(changed)) + " file(s) rewritten · " + str(len(files) - len(changed)) + " unchanged")}')
+        else:
+            cli.success(f'all {len(files)} file(s) already canonical')
     return 0
 
 
@@ -263,47 +291,58 @@ def main():
         repl()
         return
 
-    if args[0] == 'test':
+    sub = args[0]
+
+    if sub in ('-h', '--help', 'help'):
+        cli.print_help()
+        return
+
+    if sub in ('-v', '--version', 'version'):
+        cli.print_version()
+        return
+
+    if sub == 'test':
         tests_dir = args[1] if len(args) > 1 else 'tests'
         sys.exit(run_tests(tests_dir))
 
-    if args[0] == 'fmt':
+    if sub == 'fmt':
         sys.exit(run_fmt(args[1:]))
 
-    if args[0] == 'build':
+    if sub == 'build':
         sys.exit(run_build(args[1:]))
 
-    if args[0] in ('-h', '--help', 'help'):
-        print(USAGE)
-        return
-
-    if args[0] == '--compile':
-        from compiler import compile_file
-        args = args[1:]
-        if not args:
-            print("Error: --compile requires a .feel file")
+    if sub == 'run':
+        if len(args) < 2:
+            cli.error("run: missing FILE")
             sys.exit(1)
-        feel_path = args[0]
+        path = args[1]
+    elif sub == '--compile':
+        from compiler import compile_file
+        rest = args[1:]
+        if not rest:
+            cli.error("--compile requires a .feel file")
+            sys.exit(1)
+        feel_path = rest[0]
         out_path = None
         keep_c = False
-        i = 1
-        while i < len(args):
-            if args[i] == '-o' and i + 1 < len(args):
-                out_path = args[i+1]; i += 2
-            elif args[i] == '--keep-c':
-                keep_c = True; i += 1
+        j = 1
+        while j < len(rest):
+            if rest[j] == '-o' and j + 1 < len(rest):
+                out_path = rest[j+1]; j += 2
+            elif rest[j] == '--keep-c':
+                keep_c = True; j += 1
             else:
-                i += 1
+                j += 1
         if not os.path.exists(feel_path):
-            print(f"Error: file '{feel_path}' not found")
+            cli.error(f"file '{feel_path}' not found")
             sys.exit(1)
         ok = compile_file(feel_path, out_path=out_path, keep_c=keep_c)
         sys.exit(0 if ok else 1)
+    else:
+        path = sub
 
-    # Interpret mode
-    path = args[0]
     if not os.path.exists(path):
-        print(f"Error: file '{path}' not found")
+        cli.error(f"file '{path}' not found")
         sys.exit(1)
     try:
         run_file(path)
@@ -311,7 +350,7 @@ def main():
         print(str(e), file=sys.stderr)
         sys.exit(1)
     except FeelThrow as ft:
-        print(f"Uncaught throw: {ft.value}", file=sys.stderr)
+        print(f"{cli.red('uncaught throw:')} {ft.value}", file=sys.stderr)
         sys.exit(1)
 
 
