@@ -115,6 +115,28 @@ def _make_handler_class(registry, error_mapper, log_fn, cors=False):
                 log_fn(method, path, 204, _time.time() - t_start)
                 return
 
+            # PANIC MODE — every request gets 503 until the process restarts.
+            # User handlers do NOT run while panic is active.
+            try:
+                from stdlib.security_mod import is_panic_mode, panic_reason
+                if is_panic_mode():
+                    resp = FeelResponse(status=503, body={
+                        'error': 'service unavailable (panic mode)',
+                        'reason': panic_reason(),
+                    })
+                    status, ctype, body_bytes = resp.encode()
+                    self.send_response(status)
+                    self.send_header('Content-Type', ctype)
+                    self.send_header('Content-Length', str(len(body_bytes)))
+                    for k, v in cors_headers.items():
+                        self.send_header(k, v)
+                    self.end_headers()
+                    self.wfile.write(body_bytes)
+                    log_fn(method, path, status, _time.time() - t_start)
+                    return
+            except Exception:
+                pass
+
             handler, info = registry.resolve(method, path)
 
             try:

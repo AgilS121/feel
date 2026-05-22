@@ -1,0 +1,77 @@
+-- Secured login REST API:
+--   - per-IP rate limit (anti scraping / brute force)
+--   - failed-attempt tracking with auto-panic
+--   - panic mode closes the DB connection and returns 503 for all subsequent
+--     requests (backend "self-destruct" to protect the data)
+--   - audit log of every notable event
+--
+-- Run:  feel D:/feel/examples/secure_login_api.feel
+-- Try:
+--   curl -X POST http://localhost:3000/login -d '{"username":"budi","password":"wrong"}'  # repeat 5x
+--   curl http://localhost:3000/health  # eventually returns 503
+
+let db_path = "D:/feel/examples/secure_login.db"
+
+-- Reset audit log + db so the demo is rerunnable
+when file.exists("audit.log") -> file.delete("audit.log") otherwise -> nothing
+when file.exists(db_path) -> file.delete(db_path) otherwise -> nothing
+
+let conn = db.connect(db_path)
+db.exec(conn, "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password TEXT)")
+db.exec(conn, "INSERT INTO users (username, password) VALUES (?, ?)", ["budi", "correct-horse"])
+db.exec(conn, "INSERT INTO users (username, password) VALUES (?, ?)", ["siti", "battery-staple"])
+
+-- ============ Security configuration ============
+security.set_audit_log("audit.log")
+security.kill_switch(conn)   -- backend self-destructs by closing this when panic fires
+
+-- Best-effort IP extraction (production should validate X-Forwarded-For + use
+-- the real socket peer address; that is out of scope for this demo).
+define client_ip taking req ->
+  when map.has(req.headers, "x-forwarded-for") -> map.get(req.headers, "x-forwarded-for")
+  otherwise -> "127.0.0.1"
+
+-- ============ Routes ============
+
+route GET "/health" -> respond map {
+  ok: true,
+  panic: security.is_panic_mode(),
+}
+
+route POST "/login" -> do {
+  let ip = client_ip(request)
+  let user = body.username
+  let pass = body.password
+
+  -- Per-IP rate limit (10 attempts per minute)
+  when not security.rate_limit(ip, 10, 60) -> do {
+    security.audit(map { type: "RATE_LIMIT", ip: ip, user: user })
+    respond 429 map { error: "too many attempts, slow down" }
+  }
+  otherwise -> do {
+    let row = db.query_one(conn, "SELECT id, password FROM users WHERE username = ?", [user])
+
+    -- Wrong username OR wrong password — treat the same to avoid leaking
+    -- which one is wrong (timing attacks not addressed here).
+    when row == nothing or row.password != pass -> do {
+      let key = "{ip}:{user}"
+      let blocked = security.report_failed(key, 5, 300)
+      security.audit(map { type: "LOGIN_FAIL", ip: ip, user: user, blocked: blocked })
+
+      when blocked -> do {
+        -- THIS IP+USER PAIR HAS CROSSED 5 FAILS IN 5 MINUTES.
+        -- Treat it as a credential-stuffing attack and self-destruct.
+        security.panic("brute-force on {user} from {ip}")
+        respond 503 map { error: "panic triggered" }
+      }
+      otherwise -> respond 401 map { error: "invalid credentials" }
+    }
+    otherwise -> do {
+      security.audit(map { type: "LOGIN_OK", ip: ip, user: user })
+      respond map { ok: true, user_id: row.id, message: "welcome {user}" }
+    }
+  }
+}
+
+show -> "[secure-api] running on http://localhost:3000  (audit -> audit.log)"
+serve on 3000 cors

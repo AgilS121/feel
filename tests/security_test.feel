@@ -1,0 +1,49 @@
+-- Security primitives: rate limit, brute-force tracking, panic mode.
+
+security.reset()
+
+-- 1. rate_limit allows first N, blocks the (N+1)th
+let ip = "1.2.3.4"
+assert security.rate_limit(ip, 3, 60) == true, "first request allowed"
+assert security.rate_limit(ip, 3, 60) == true, "second request allowed"
+assert security.rate_limit(ip, 3, 60) == true, "third request allowed"
+assert security.rate_limit(ip, 3, 60) == false, "fourth request blocked"
+
+-- Different key has its own bucket
+assert security.rate_limit("5.6.7.8", 3, 60) == true, "different IP not blocked"
+
+-- 2. report_failed signals block after threshold
+security.reset()
+assert security.report_failed("attacker", 3, 300) == false, "1st fail under threshold"
+assert security.report_failed("attacker", 3, 300) == false, "2nd fail under threshold"
+assert security.report_failed("attacker", 3, 300) == true, "3rd fail crosses threshold"
+
+-- 3. panic mode is idempotent + flips global flag
+security.reset()
+assert security.is_panic_mode() == false, "initially not panic"
+assert security.panic("test breach") == true, "first panic succeeds"
+assert security.is_panic_mode() == true, "panic flag set"
+assert security.panic_reason() == "test breach", "reason stored"
+assert security.panic("second call") == false, "second panic returns false"
+
+-- 4. kill switch closes registered resources on panic
+security.reset()
+let conn = db.connect(":memory:")
+db.exec(conn, "CREATE TABLE t (x INTEGER)")
+db.exec(conn, "INSERT INTO t (x) VALUES (1)")
+security.kill_switch(conn)
+
+let before = db.query(conn, "SELECT * FROM t")
+assert length(before) == 1, "db works before panic"
+
+security.panic("kill-switch test")
+
+-- After panic, conn is closed → db.exec should throw
+let post_panic_ok = try do {
+  db.exec(conn, "INSERT INTO t (x) VALUES (2)")
+  false
+} catch err -> true
+assert post_panic_ok == true, "db connection closed by kill switch"
+
+security.reset()
+show -> "security_test OK"

@@ -696,12 +696,20 @@ class Interpreter:
         source = self.source
 
         def py_handler(feel_request):
-            # New scope: parent is closure (top-level defines visible)
+            # Build request as a Feel map so the handler can do request.headers,
+            # request.query["k"], request.body, etc.
+            request_map = {
+                'method':  feel_request.method,
+                'path':    feel_request.path,
+                'query':   feel_request.query,
+                'headers': feel_request.headers,
+                'body':    feel_request.body,
+                'params':  feel_request.params,
+            }
             local = Environment(closure_env)
-            local.set('request', feel_request)
+            local.set('request', request_map)
             local.set('body', feel_request.body)
             local.set('query', feel_request.query)
-            # Path params auto-bound to local scope
             for k, v in feel_request.params.items():
                 local.set(k, v)
             sub = Interpreter.__new__(Interpreter)
