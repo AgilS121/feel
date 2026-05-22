@@ -1,0 +1,30 @@
+-- Validate module: shape check against record schemas.
+
+record CreateUser { name: text, email: text, age: number }
+record Address { street: text, city: text }
+
+-- Valid input passes through
+let good = validate.shape(map { name: "Budi", email: "b@x.com", age: 25 }, "CreateUser")
+assert good.name == "Budi", "valid passes through"
+
+-- Missing field → throw
+let r1 = try validate.shape(map { name: "Budi", age: 25 }, "CreateUser") catch err -> err
+assert contains(r1, "missing field 'email'"), "missing field reported"
+
+-- Wrong type → throw
+let r2 = try validate.shape(map { name: "Budi", email: "x", age: "twenty" }, "CreateUser") catch err -> err
+assert contains(r2, "must be number"), "type mismatch reported"
+
+-- Unknown record → throw
+let r3 = try validate.shape(map { x: 1 }, "Nonexistent") catch err -> err
+assert contains(r3, "unknown record"), "unknown record reported"
+
+-- is_valid returns bool
+assert validate.is_valid(map { name: "B", email: "@", age: 1 }, "CreateUser") == true, "is_valid true"
+assert validate.is_valid(map { name: "B" }, "CreateUser") == false, "is_valid false"
+
+-- errors_for returns list
+let errs = validate.errors_for(map { name: "B" }, "CreateUser")
+assert length(errs) == 2, "two missing fields = two errors"
+
+show -> "validate_test OK"
