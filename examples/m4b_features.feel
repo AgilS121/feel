@@ -1,0 +1,56 @@
+-- M4-B feature showcase: try/catch/throw, records, stdlib namespaces.
+
+-- try/catch
+let safe = try throw "boom" catch err -> "caught: {err}"
+show -> safe
+
+-- nested try
+let r2 = try (try throw "inner" catch e -> throw "outer:{e}") catch x -> x
+show -> r2
+
+-- no throw — body value passes through
+let r3 = try 42 catch e -> 0
+show -> r3
+
+-- Records (dynamic, mapped to Go map[string]any with __type__)
+record Person { name: text, age: number }
+let budi = Person { name: "Budi", age: 25 }
+show -> budi.name
+show -> budi.age
+show -> type_of(budi)
+
+-- string stdlib
+show -> string.trim("  hello  ")
+show -> string.replace("feel lang", "lang", "language")
+show -> string.upper("feel")
+show -> string.starts_with("feel rocks", "feel")
+show -> string.words("the quick brown fox")
+
+-- list stdlib
+show -> list.range(1, 6)
+show -> list.sort(["c", "a", "b"])
+show -> list.take([1, 2, 3, 4, 5], 3)
+
+-- list higher-order with lambdas
+let nums = [1, 2, 3, 4, 5]
+show -> list.map(nums, fn x -> x * 2)
+show -> list.filter(nums, fn x -> x > 2)
+show -> list.fold(nums, 0, fn acc, x -> acc + x)
+
+-- map stdlib
+let user = map { name: "Budi", age: 25, city: "Jakarta" }
+show -> map.size(user)
+show -> list.sort(map.keys(user))
+show -> map.get(user, "name")
+show -> map.has(user, "city")
+
+let user2 = map.set(user, "age", 30)
+show -> user2.age
+show -> user.age
+
+-- json stdlib roundtrip
+let data = map { lang: "Feel", version: "0.4.1" }
+let encoded = json.encode(data)
+show -> encoded
+let back = json.decode(encoded)
+show -> back.lang

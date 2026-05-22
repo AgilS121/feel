@@ -1,6 +1,18 @@
 """string module — operasi text yang sering dipakai."""
 
 
+def upper(s):
+    return s.upper() if isinstance(s, str) else s
+
+
+def lower(s):
+    return s.lower() if isinstance(s, str) else s
+
+
+def contains(s, sub):
+    return sub in s if isinstance(s, str) else False
+
+
 def trim(s):
     return s.strip() if isinstance(s, str) else s
 
@@ -62,6 +74,9 @@ def words(s):
 
 
 EXPORTS = {
+    'upper':       upper,
+    'lower':       lower,
+    'contains':    contains,
     'trim':        trim,
     'trim_start':  trim_start,
     'trim_end':    trim_end,

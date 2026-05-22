@@ -73,6 +73,7 @@ def main():
         ('examples/m4_hello.feel', 'm4_hello (let, show, when, arithmetic)'),
         ('examples/m4_features.feel', 'm4_features (define, lambda, list, for, repeat)'),
         ('examples/m4_map_pipeline.feel', 'm4_map_pipeline (map, indexing, pipeline, nested when)'),
+        ('examples/m4b_features.feel', 'm4b_features (try/catch, records, string/list/map/json stdlib)'),
     ]
 
     failed = 0

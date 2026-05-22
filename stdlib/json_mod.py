@@ -18,7 +18,8 @@ def encode(value, pretty=False):
     data = _to_jsonable(value)
     if pretty:
         return _json.dumps(data, indent=2, ensure_ascii=False)
-    return _json.dumps(data, ensure_ascii=False)
+    # Compact form (no spaces) — matches Go json.Marshal and is canonical.
+    return _json.dumps(data, ensure_ascii=False, separators=(',', ':'))
 
 
 def decode(text):
