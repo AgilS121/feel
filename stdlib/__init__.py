@@ -8,6 +8,7 @@ from . import file_mod
 from . import math_mod
 from . import list_ops
 from . import ai_mod
+from . import db_mod
 
 
 def install_into(env):
@@ -23,6 +24,7 @@ def install_into(env):
         ('math', math_mod.EXPORTS),
         ('list', list_ops.EXPORTS),
         ('ai', ai_mod.EXPORTS),
+        ('db', db_mod.EXPORTS),
     ]:
         mod_env = Environment()
         for n, fn in mod_funcs.items():

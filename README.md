@@ -5,7 +5,7 @@ First-class AI primitives. REST API as a keyword. Strict canonical syntax so AI 
 
 Compiles to standalone Go binaries (M4 target — currently Python-hosted).
 
-> **Status:** v0.3-m2 · experimental · 43/43 tests pass
+> **Status:** v0.4-m3 · experimental · 63/63 tests pass
 
 ---
 
@@ -154,7 +154,9 @@ route GET "/users/{id}" -> do {
 |---|---|
 | `examples/hello_api.feel` | Minimal REST API (5 lines) |
 | `examples/ai_api.feel` | AI-powered endpoints (`/ask`, `/summarize`, `/classify`, `/chat`) |
-| `examples/crud_rest.feel` | Full CRUD REST + AI classify |
+| `examples/agent_api.feel` | Tools + agents + tool-use loop |
+| `examples/crud_rest.feel` | Full CRUD REST + AI classify (JSON file) |
+| `examples/crud_db.feel` | Full CRUD REST + SQLite + AI + agent (M3 flagship) |
 | `examples/crud_todos.feel` | File-backed CRUD (no HTTP) |
 | `examples/word_count.feel` | File IO + JSON + fold |
 | `hello.feel` | Language sampler (printed by the README quick start) |
@@ -210,7 +212,7 @@ feel/
 ├── compiler.py       Experimental Feel → C → native binary (single-program)
 ├── errors.py         FeelError (code, source caret, fix hint, to_dict)
 ├── runtime/          HTTP server, router, FeelRequest, FeelResponse
-├── stdlib/           string, list, map, json, time, file, math, ai
+├── stdlib/           string, list, map, json, time, file, math, ai, db
 ├── tests/            *_test.feel (Feel-side) + *_test.py (runtime + e2e)
 └── examples/         Demo programs (hello_api, ai_api, crud_rest, …)
 ```
@@ -223,8 +225,9 @@ feel/
 |---|---|---|
 | M0 | Lexer / parser / interpreter foundation | ✅ |
 | M1 | Error reporting, try/catch, map, modules, stdlib | ✅ `v0.2-m1` |
-| **M2** | Block, lambda, HTTP, REST keywords, AI primitives | ✅ **`v0.3-m2`** |
-| M3 | `agent` / `tool` keywords, DB driver, query DSL, `feelfmt` | ⏳ in progress |
+| M2 | Block, lambda, HTTP, REST keywords, AI primitives | ✅ `v0.3-m2` |
+| **M3** | `tool` & `agent` keywords, tool-use loop, SQLite | ✅ **`v0.4-m3`** |
+| M3+ | query DSL, `feelfmt`, LSP basics | ⏳ |
 | M4 | Feel → Go transpiler; drop Python at user runtime | 2027 |
 | M5 | Self-host compiler (Feel compiler written in Feel) | 2027 |
 | M6 | LSP, package manager, ecosystem | 2028 |

@@ -1,0 +1,48 @@
+-- SQLite db module
+
+let conn = db.connect(":memory:")
+
+-- Schema
+db.exec(conn, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
+
+-- Insert with parameters
+db.exec(conn, "INSERT INTO users (name, age) VALUES (?, ?)", ["Budi", 25])
+db.exec(conn, "INSERT INTO users (name, age) VALUES (?, ?)", ["Siti", 30])
+db.exec(conn, "INSERT INTO users (name, age) VALUES (?, ?)", ["Ana", 22])
+
+assert db.last_id(conn) == 3, "last_id after 3 inserts"
+
+-- Query all
+let all_users = db.query(conn, "SELECT id, name, age FROM users ORDER BY id")
+assert length(all_users) == 3, "3 users"
+assert all_users[0].name == "Budi", "first user name"
+assert all_users[0].age == 25, "first user age"
+
+-- Query one
+let budi = db.query_one(conn, "SELECT * FROM users WHERE name = ?", ["Budi"])
+assert budi.age == 25, "budi age"
+
+-- Filter
+let adults = db.query(conn, "SELECT name FROM users WHERE age >= ?", [25])
+assert length(adults) == 2, "2 adults"
+
+-- Update
+let affected = db.exec(conn, "UPDATE users SET age = ? WHERE name = ?", [26, "Budi"])
+assert affected == 1, "1 row updated"
+
+let updated_budi = db.query_one(conn, "SELECT age FROM users WHERE name = ?", ["Budi"])
+assert updated_budi.age == 26, "budi age now 26"
+
+-- Delete
+let deleted = db.exec(conn, "DELETE FROM users WHERE name = ?", ["Ana"])
+assert deleted == 1, "1 row deleted"
+
+let remaining = db.query(conn, "SELECT COUNT(*) AS n FROM users")
+assert remaining[0].n == 2, "2 remaining"
+
+-- Missing row
+let missing = db.query_one(conn, "SELECT * FROM users WHERE id = 999")
+assert missing == nothing, "missing returns nothing"
+
+db.close(conn)
+show -> "db_test OK"
