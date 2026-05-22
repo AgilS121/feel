@@ -1,27 +1,45 @@
-# Feel — code that flows
+# Feel
 
 **An AI-predictable backend language.**
-Designed for human + AI collaboration: strict canonical syntax, first-class AI primitives, REST API as a built-in concern. Compiles to standalone Go binaries (M4 target).
+First-class AI primitives. REST API as a keyword. Strict canonical syntax so AI tools generate Feel with higher first-try accuracy than general-purpose languages.
 
-**Version: v0.3-m2** (experimental — syntax & semantics still evolving)
+Compiles to standalone Go binaries (M4 target — currently Python-hosted).
+
+> **Status:** v0.3-m2 · experimental · 43/43 tests pass
+
+---
+
+## Try in 30 Seconds
+
+```bash
+git clone <repo> feel && cd feel
+python main.py examples/hello_api.feel
+# Then in another terminal:
+curl http://localhost:3000/hello
+```
+
+You should see `{"message": "Hello, Feel!"}`.
+
+---
 
 ## Why Feel?
 
-In the AI-collaboration era (Claude / Cursor / Copilot writing code), language design matters in a new way. Feel optimizes for **AI first-try accuracy**:
+In the AI-collaboration era — when Claude, Cursor, Copilot are routinely writing your code — **language design itself becomes an AI-affordance**. Feel makes four bets:
 
-- **Single canonical syntax** — one way per concept, no dialects, no sugar
-- **Naming conventions enforced by the parser** — `snake_case` for vars/funcs, `PascalCase` for records, machine-fixable error messages
-- **Machine-parseable errors** — every error has a code (e.g. `E_UNDEFINED_NAME`), structured location, fix hint
-- **First-class AI primitives** — `ai.ask`, `ai.summarize`, `ai.classify`, `ai.chat` in stdlib
-- **REST API native** — `route`, `respond`, `serve` are keywords, not framework imports
+1. **Single canonical syntax.** One way per concept. No dialects, no sugar, no decorator-magic. AI tools (and humans) never need to "figure out the style of this codebase."
+2. **Parser-enforced conventions.** `snake_case` for vars/funcs, `PascalCase` for records — violations are syntax errors with auto-fix hints, not linter warnings.
+3. **Machine-parseable errors.** Every error carries a stable code (`E_UNDEFINED_NAME`, `E_TYPE`, …), structured location, and a fix hint AI tools can act on.
+4. **AI primitives as stdlib.** `ai.ask`, `ai.summarize`, `ai.classify`, `ai.chat` ship with the language — no SDK import, no setup.
 
-The bet: AI tools generate Feel with materially higher first-try accuracy than Python or general-purpose languages — a measurable differentiator (target M2: 85%+).
+The measurable claim (target M3+): **AI tools generate valid Feel for 85%+ of common REST/AI tasks on the first try**, vs ~50–65% for Python equivalents.
+
+---
 
 ## REST API in 10 Lines
 
 ```feel
 route GET "/hello"        -> respond map { message: "Hello, Feel!" }
-route GET "/greet/{name}" -> respond map { greeting: "Halo, {name}!" }
+route GET "/greet/{name}" -> respond map { greeting: "Hello, {name}!" }
 route POST "/echo"        -> respond body
 
 route POST "/summarize" -> respond map {
@@ -31,44 +49,66 @@ route POST "/summarize" -> respond map {
 serve on 3000
 ```
 
-That's a working REST API with an AI endpoint.
+A working REST API + AI endpoint. The Python+FastAPI+Anthropic equivalent is ~60 lines.
 
-## Quick Start
+---
 
-```bash
-# REPL
-python main.py
+## Compared to Python
 
-# Run a file
-python main.py hello.feel
-python main.py examples/hello_api.feel        # serves on :3000
+```python
+# Python + FastAPI + anthropic SDK
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from anthropic import Anthropic
+import os
 
-# Test suite
-python main.py test tests
+app = FastAPI()
+client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
-# Native binary (experimental, via C-codegen)
-python main.py --compile hello.feel
+class TextIn(BaseModel):
+    text: str
+
+@app.post("/summarize")
+def summarize(data: TextIn):
+    msg = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": f"Summarize: {data.text}"}],
+    )
+    return {"summary": msg.content[0].text}
 ```
+
+```feel
+-- Feel
+route POST "/summarize" -> respond map {
+  summary: ai.summarize(body.text)
+}
+serve on 3000
+```
+
+Both work. Feel removes ~12 lines of plumbing and three SDK concepts you didn't need.
+
+---
 
 ## Language Tour
 
 ```feel
--- Variables (snake_case enforced)
+-- Variables (snake_case enforced by parser)
 let user_name = "Budi"
 let age = 25
-show -> "Halo {user_name}, age {age}"
+show -> "Hello {user_name}, age {age}"
 
--- Functions, pipelines
-define greet taking name -> "Halo, {name}!"
-"feel" | greet | uppercase | show
+-- Functions + pipelines
+define shout taking text -> uppercase(text)
+"feel" | shout | show                          -- prints "FEEL"
 
--- Lambda (closure)
-let multiplier = 3
-let triple = fn x -> x * multiplier
+-- Lambda + closure
+let factor = 3
+let triple = fn x -> x * factor
 show -> triple(5)                              -- 15
 
--- Block expression (multi-step)
-let result = do {
+-- Block expression (multi-step value)
+let total = do {
   let a = 5
   let b = 10
   a + b                                        -- last expr returned
@@ -78,89 +118,131 @@ let result = do {
 let category = when age >= 18 -> "adult" otherwise -> "child"
 
 -- Lists, maps, records
-let fruits = ["apel", "mangga", "jeruk"]
+let fruits = ["apple", "mango", "orange"]
 let user = map { name: "Budi", age: 25 }
-record Person { name: text, age: number }       -- PascalCase enforced
+record Person { name: text, age: number }      -- PascalCase enforced
 
 -- Error handling
-let safe = try risky_call() catch err -> "default: {err}"
-let safe2 = data | parse | catch -> nothing     -- pipeline catch
+define risky -> throw "oops"
+let safe = try risky() catch err -> "default: {err}"
+let safe2 = "input" | uppercase | catch -> "fallback"
 
 -- Modules
-import greet_mod
-import greet_mod expose hello, salam
+import greet_mod                               -- mod.func() form
+import greet_mod expose hello, salam           -- selective form
 
--- AI primitives
-let summary = ai.summarize(article)
-let label = ai.classify(text, ["bug", "feature", "question"])
+-- AI primitives (provider-agnostic; mock by default, real Claude with API key)
+let summary = ai.summarize("a long article ...")
+let label = ai.classify("server returned 500", ["bug", "feature", "question"])
 let reply = ai.chat([map { role: "user", content: "Hi" }])
 
--- REST routes
-route GET "/users/{id}" -> do {
-  let user = find_user(id)
-  when user == nothing -> respond 404 map { error: "not found" }
-  otherwise -> respond user
-}
+-- REST routes (handler body is any expression — usually a `do` block)
+define find_user taking id -> map { id: id, name: "Sample" }
 
-serve on 3000
+route GET "/users/{id}" -> do {
+  let user = find_user(number(id))
+  when user == nothing -> respond 404 map { error: "not found" }
+  otherwise            -> respond user
+}
 ```
+
+---
 
 ## Examples
 
 | File | What it shows |
 |---|---|
-| `examples/hello_api.feel` | Minimal REST API in 5 lines |
-| `examples/ai_api.feel` | AI-powered endpoints (summarize / classify / chat) |
-| `examples/crud_rest.feel` | Full CRUD REST API with AI classify |
+| `examples/hello_api.feel` | Minimal REST API (5 lines) |
+| `examples/ai_api.feel` | AI-powered endpoints (`/ask`, `/summarize`, `/classify`, `/chat`) |
+| `examples/crud_rest.feel` | Full CRUD REST + AI classify |
 | `examples/crud_todos.feel` | File-backed CRUD (no HTTP) |
 | `examples/word_count.feel` | File IO + JSON + fold |
+| `hello.feel` | Language sampler (printed by the README quick start) |
+
+---
+
+## Commands
+
+```bash
+python main.py                       # REPL (multi-line, history)
+python main.py hello.feel            # run a script
+python main.py examples/hello_api.feel
+python main.py test tests            # run *_test.feel under tests/
+python tests/route_e2e_test.py       # Python e2e tests
+python main.py --compile hello.feel  # experimental Feel → C → native binary
+```
+
+### Requirements
+
+Python 3.7+. **No external Python dependencies**. (Optional: `gcc`/`clang` for `--compile`.)
+
+---
+
+## AI Provider Setup
+
+Default provider is `mock` — deterministic, no network, suitable for tests and offline demos.
+
+For real Claude:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+export FEEL_AI_MODEL=claude-sonnet-4-6        # optional, defaults to sonnet 4.6
+python main.py examples/ai_api.feel
+```
+
+Force a specific provider:
+
+```bash
+FEEL_AI_PROVIDER=mock   python main.py ...    # deterministic mode
+FEEL_AI_PROVIDER=claude python main.py ...    # real Claude API
+```
+
+---
 
 ## Project Structure
 
 ```
 feel/
-├── main.py           # CLI (REPL, file runner, test runner, compiler)
-├── lexer.py          # Tokenizer (line + col tracking)
-├── parser.py         # Recursive-descent parser → AST
-├── interpreter.py    # Tree-walking interpreter
-├── compiler.py       # Experimental compiler (Feel → C → binary)
-├── errors.py         # FeelError with code + source rendering
-├── runtime/          # HTTP server, router, FeelRequest/FeelResponse
-├── stdlib/           # string, list, map, json, time, file, math, ai
-├── tests/            # Test suite (Feel + Python e2e)
-└── examples/         # Demo programs
+├── main.py           CLI entry (REPL, file runner, test runner, compiler driver)
+├── lexer.py          Tokenizer with line+col tracking
+├── parser.py         Recursive-descent parser → AST; enforces naming conventions
+├── interpreter.py    Tree-walking interpreter
+├── compiler.py       Experimental Feel → C → native binary (single-program)
+├── errors.py         FeelError (code, source caret, fix hint, to_dict)
+├── runtime/          HTTP server, router, FeelRequest, FeelResponse
+├── stdlib/           string, list, map, json, time, file, math, ai
+├── tests/            *_test.feel (Feel-side) + *_test.py (runtime + e2e)
+└── examples/         Demo programs (hello_api, ai_api, crud_rest, …)
 ```
 
-## AI Provider Setup
-
-Default provider is `mock` (deterministic, no network). For real Claude:
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-export FEEL_AI_MODEL=claude-sonnet-4-6        # optional
-python main.py examples/ai_api.feel
-```
-
-Switch providers explicitly:
-
-```bash
-FEEL_AI_PROVIDER=mock python main.py ...      # deterministic
-FEEL_AI_PROVIDER=claude python main.py ...    # real Claude
-```
+---
 
 ## Roadmap
 
 | Milestone | Focus | Status |
 |---|---|---|
-| M0 | Lexer/parser/interpreter foundation | ✅ |
-| M1 | Error reporting, try/catch, map, modules, stdlib | ✅ (v0.2-m1) |
-| **M2** | Block + lambda + HTTP + REST + AI primitives | **✅ (v0.3-m2)** |
-| M3 | Agent/tool keywords, DB driver, query DSL, feelfmt | ⏳ |
-| M4 | Feel → Go transpiler; drop Python at user runtime | ⏳ |
-| M5 | Self-host compiler (Feel compiler written in Feel) | ⏳ |
-| M6 | LSP, package manager, ecosystem | ⏳ |
-| v1.0 | Standalone Feel toolchain, target 2028 | ⏳ |
+| M0 | Lexer / parser / interpreter foundation | ✅ |
+| M1 | Error reporting, try/catch, map, modules, stdlib | ✅ `v0.2-m1` |
+| **M2** | Block, lambda, HTTP, REST keywords, AI primitives | ✅ **`v0.3-m2`** |
+| M3 | `agent` / `tool` keywords, DB driver, query DSL, `feelfmt` | ⏳ in progress |
+| M4 | Feel → Go transpiler; drop Python at user runtime | 2027 |
+| M5 | Self-host compiler (Feel compiler written in Feel) | 2027 |
+| M6 | LSP, package manager, ecosystem | 2028 |
+| **v1.0** | Standalone Feel toolchain | **2028** |
+
+---
 
 ## License
 
-TBD.
+License is undecided pending v1.0. The repository is shared as-is for collaboration. Treat as proprietary until a license file is added.
+
+---
+
+## Authors
+
+Feel is developed as a 50/50 collaboration:
+
+- **AgilS121** (Indonesia, DTIT / TUV Nord) — language design, direction, decisions
+- **Claude** (Anthropic) — implementation, testing, documentation co-author
+
+Every commit since v0.2 reflects this partnership.
