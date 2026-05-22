@@ -3,15 +3,38 @@ __pycache__/
 *.pyo
 *.pyd
 
-# Output sementara
+# Claude Code local config (per-developer settings)
+.claude/
+
+# Runtime output from example programs
 examples/*_out.json
+examples/todos.json
+examples/todos.db
+examples/*.db
 tests/_tmp_*
+
+# Build artifacts
+*.exe
+*.bin
+*.so
+*.dylib
+out/
+dist/
+build/
 
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # IDE
 .vscode/
 .idea/
 *.swp
+*.swo
+*~
+
+# Environment files (may contain API keys)
+.env
+.env.local
+.env.*.local
