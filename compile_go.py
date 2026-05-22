@@ -449,7 +449,7 @@ BUILTINS_GO = {
     'rest', 'push', 'join', 'split', 'contains',
 }
 
-STDLIB_MODULES = {'string', 'list', 'map', 'json', 'ai', 'db'}
+STDLIB_MODULES = {'string', 'list', 'map', 'json', 'ai', 'db', 'security'}
 
 
 def _is_builtin(name):
@@ -495,6 +495,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -1275,6 +1276,22 @@ func feel_dispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Panic mode → 503 immediately
+	if feel_panic_flag {
+		resp := feel_response{status: 503, body: map[string]any{
+			"error":  any("service unavailable (panic mode)"),
+			"reason": any(feel_panic_reason_text),
+		}}
+		status, ctype, body := feel_encode_response(resp)
+		w.Header().Set("Content-Type", ctype)
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+		for k, v := range corsHeaders { w.Header().Set(k, v) }
+		w.WriteHeader(status)
+		w.Write(body)
+		fmt.Fprintf(os.Stderr, "%-6s %-40s -> %d  (%.1fms) [panic]\n", method, path, status, float64(time.Since(t0).Microseconds())/1000)
+		return
+	}
+
 	route, captures, methodsForPath := feel_resolve_route(method, path)
 
 	var resp feel_response
@@ -1562,6 +1579,164 @@ var feel_ai_mod = map[string]any{
 	"provider":  any(func() any { return any(feel_ai_provider()) }),
 }
 
+// ---------- Security primitives ----------
+
+type feel_closable interface{ Close() error }
+
+var feel_sec_lock sync.Mutex
+var feel_panic_flag bool
+var feel_panic_reason_text string
+var feel_kill_switches []any
+var feel_rate_buckets = map[string][]float64{}
+var feel_failed_attempts = map[string][]float64{}
+var feel_audit_path = ""
+
+func feel_now_seconds() float64 {
+	return float64(time.Now().UnixNano()) / 1e9
+}
+
+func feel_security_rate_limit(args ...any) any {
+	feel_sec_lock.Lock()
+	defer feel_sec_lock.Unlock()
+	if len(args) < 3 {
+		return any(true)
+	}
+	key := feel_str(args[0])
+	maxReq := int(feel_num(args[1]))
+	window := feel_num(args[2])
+	now := feel_now_seconds()
+	cutoff := now - window
+	bucket := feel_rate_buckets[key]
+	start := 0
+	for start < len(bucket) && bucket[start] < cutoff {
+		start++
+	}
+	bucket = bucket[start:]
+	if len(bucket) >= maxReq {
+		feel_rate_buckets[key] = bucket
+		return any(false)
+	}
+	bucket = append(bucket, now)
+	feel_rate_buckets[key] = bucket
+	return any(true)
+}
+
+func feel_security_report_failed(args ...any) any {
+	feel_sec_lock.Lock()
+	defer feel_sec_lock.Unlock()
+	if len(args) < 3 {
+		return any(false)
+	}
+	key := feel_str(args[0])
+	maxFail := int(feel_num(args[1]))
+	window := feel_num(args[2])
+	now := feel_now_seconds()
+	cutoff := now - window
+	bucket := feel_failed_attempts[key]
+	start := 0
+	for start < len(bucket) && bucket[start] < cutoff {
+		start++
+	}
+	bucket = bucket[start:]
+	bucket = append(bucket, now)
+	feel_failed_attempts[key] = bucket
+	return any(len(bucket) >= maxFail)
+}
+
+func feel_security_panic(reason any) any {
+	feel_sec_lock.Lock()
+	defer feel_sec_lock.Unlock()
+	if feel_panic_flag {
+		return any(false)
+	}
+	feel_panic_flag = true
+	feel_panic_reason_text = feel_str(reason)
+	for _, conn := range feel_kill_switches {
+		if c, ok := conn.(feel_closable); ok {
+			_ = c.Close()
+		}
+	}
+	feel_kill_switches = nil
+	feel_audit_event(map[string]any{
+		"type": "PANIC", "reason": feel_panic_reason_text,
+	})
+	fmt.Fprintf(os.Stderr, "[SECURITY] PANIC MODE ACTIVE: %s\n", feel_panic_reason_text)
+	return any(true)
+}
+
+func feel_security_is_panic_mode() any { return any(feel_panic_flag) }
+func feel_security_panic_reason() any  { return any(feel_panic_reason_text) }
+
+func feel_security_kill_switch(conn any) any {
+	feel_sec_lock.Lock()
+	defer feel_sec_lock.Unlock()
+	feel_kill_switches = append(feel_kill_switches, conn)
+	return any(true)
+}
+
+func feel_security_audit(event any) any {
+	feel_audit_event(event)
+	return any(true)
+}
+
+func feel_security_set_audit_log(args ...any) any {
+	feel_sec_lock.Lock()
+	defer feel_sec_lock.Unlock()
+	if len(args) >= 1 && args[0] != nil {
+		feel_audit_path = feel_str(args[0])
+	} else {
+		feel_audit_path = ""
+	}
+	return any(true)
+}
+
+func feel_security_reset() any {
+	feel_sec_lock.Lock()
+	defer feel_sec_lock.Unlock()
+	feel_panic_flag = false
+	feel_panic_reason_text = ""
+	feel_rate_buckets = map[string][]float64{}
+	feel_failed_attempts = map[string][]float64{}
+	feel_kill_switches = nil
+	return any(true)
+}
+
+func feel_audit_event(event any) {
+	var line string
+	if m, ok := event.(map[string]any); ok {
+		entry := map[string]any{}
+		for k, v := range m { entry[k] = v }
+		if _, ok := entry["time"]; !ok {
+			entry["time"] = feel_now_seconds()
+		}
+		data, _ := json.Marshal(feel_to_jsonable(entry))
+		line = string(data)
+	} else {
+		line = fmt.Sprintf("%.3f: %s", feel_now_seconds(), feel_str(event))
+	}
+	if feel_audit_path != "" {
+		f, err := os.OpenFile(feel_audit_path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err == nil {
+			fmt.Fprintln(f, line)
+			f.Close()
+			return
+		}
+	}
+	fmt.Fprintf(os.Stderr, "[audit] %s\n", line)
+}
+
+var feel_security_mod = map[string]any{
+	"rate_limit":    any(feel_security_rate_limit),
+	"report_failed": any(feel_security_report_failed),
+	"panic":         any(feel_security_panic),
+	"is_panic_mode": any(feel_security_is_panic_mode),
+	"panic_reason":  any(feel_security_panic_reason),
+	"kill_switch":   any(feel_security_kill_switch),
+	"audit":         any(feel_security_audit),
+	"set_audit_log": any(feel_security_set_audit_log),
+	"reset":         any(feel_security_reset),
+}
+
 // ---------- Agent / tool ----------
 
 func feel_make_tool(name, description string, params []string, fn any) any {
@@ -1708,7 +1883,7 @@ var _ = bytes.NewReader
 '''
 
 
-RUNTIME_GO_DB_IMPORTS = '"database/sql"\n\t"sync"\n\t_ "modernc.org/sqlite"\n'
+RUNTIME_GO_DB_IMPORTS = '"database/sql"\n\t_ "modernc.org/sqlite"\n'
 
 RUNTIME_GO_DB_BODY = r'''
 // ---------- db runtime (M4-D) ----------
