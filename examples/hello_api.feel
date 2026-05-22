@@ -1,0 +1,9 @@
+-- Minimal REST API in Feel — 5 lines.
+-- Run:  python main.py examples/hello_api.feel
+-- Test: curl http://localhost:3000/hello
+
+route GET "/hello"           -> respond map { message: "Hello, Feel!" }
+route GET "/greet/{name}"    -> respond map { greeting: "Halo, {name}!" }
+route POST "/echo"           -> respond body
+
+serve on 3000

@@ -1,0 +1,76 @@
+-- Full CRUD REST API in Feel v0.3-m2.
+-- ~40 lines for a complete todos CRUD (Python+FastAPI equivalent: ~100 lines).
+--
+-- Run:  python main.py examples/crud_rest.feel
+-- Then:
+--   curl http://localhost:3000/todos
+--   curl -X POST http://localhost:3000/todos -d '{"title": "Buy milk"}'
+--   curl http://localhost:3000/todos/1
+--   curl -X PATCH http://localhost:3000/todos/1/done
+--   curl -X DELETE http://localhost:3000/todos/1
+--   curl -X POST http://localhost:3000/todos/1/classify
+
+let db_path = "examples/todos.json"
+
+-- Initialize empty store on startup
+when not file.exists(db_path) -> file.write(db_path, "[]") otherwise -> nothing
+
+define load -> json.decode(file.read(db_path))
+define save taking xs -> file.write(db_path, json.encode(xs, true))
+define next_id taking xs ->
+  when length(xs) == 0 -> 1
+  otherwise -> last(list.sort(list.map(xs, fn t -> t.id))) + 1
+
+-- GET /todos — list all
+route GET "/todos" -> respond load()
+
+-- GET /todos/{id} — find one
+route GET "/todos/{id}" -> do {
+  let target = number(id)
+  let found = first(list.filter(load(), fn t -> t.id == target))
+  when found == nothing -> respond 404 map { error: "todo not found", id: target }
+  otherwise -> respond found
+}
+
+-- POST /todos — create from { title }
+route POST "/todos" -> do {
+  let title = body.title
+  when title == nothing -> respond 400 map { error: "missing 'title' in body" }
+  otherwise -> do {
+    let todos = load()
+    let new_todo = map { id: next_id(todos), title: title, done: false }
+    save(push(todos, new_todo))
+    respond 201 new_todo
+  }
+}
+
+-- PATCH /todos/{id}/done — mark done
+route PATCH "/todos/{id}/done" -> do {
+  let target = number(id)
+  let updated = list.map(load(), fn t ->
+    when t.id == target -> map.set(t, "done", true)
+    otherwise -> t)
+  save(updated)
+  respond 204
+}
+
+-- DELETE /todos/{id}
+route DELETE "/todos/{id}" -> do {
+  let target = number(id)
+  let kept = list.filter(load(), fn t -> t.id != target)
+  save(kept)
+  respond 204
+}
+
+-- POST /todos/{id}/classify — AI classify the title
+route POST "/todos/{id}/classify" -> do {
+  let target = number(id)
+  let found = first(list.filter(load(), fn t -> t.id == target))
+  when found == nothing -> respond 404 map { error: "todo not found" }
+  otherwise -> respond map {
+    title: found.title,
+    category: ai.classify(found.title, ["work", "personal", "errand", "other"])
+  }
+}
+
+serve on 3000
