@@ -1,18 +1,16 @@
--- CRUD demo: todos persisted to a JSON file.
--- Works on Feel M1 (no HTTP yet — that comes in M2).
+-- CRUD demo on JSON storage — M2-A version (uses lambda + block).
 -- Run:  python main.py examples/crud_todos.feel
 
 let db_path = "examples/todos.json"
 
--- ============ Helpers ============
 define save taking xs -> file.write(db_path, json.encode(xs, true))
 define load -> json.decode(file.read(db_path))
 define new_todo taking id, title -> map { id: id, title: title, done: false }
 
--- ============ Reset storage ============
+-- Reset storage
 save([])
 
--- ============ CREATE ============
+-- CREATE
 let todos = push(load(), new_todo(1, "Drink coffee"))
 let todos = push(todos, new_todo(2, "Read Feel docs"))
 let todos = push(todos, new_todo(3, "Build a REST API"))
@@ -21,38 +19,28 @@ save(todos)
 show -> "=== After CREATE ==="
 for t in load() -> show -> "  [{t.id}] {t.title} | done: {t.done}"
 
--- ============ READ ALL ============
+-- READ ALL
 show -> "Total: {length(load())} todos"
 
--- ============ READ ONE (find by id) ============
--- Pattern: fold with target id baked into accumulator
-define find_step taking acc, t ->
-  when t.id == acc.target -> map.set(acc, "found", t)
-  otherwise -> acc
+-- READ ONE: lambda + first (cleaner than fold with baked target)
+let target = 2
+let found = first(list.filter(load(), fn t -> t.id == target))
+show -> "Found id {target}: {found.title}"
 
-let r = list.fold(load(), map { target: 2, found: nothing }, find_step)
-show -> "Found id 2: {r.found.title}"
+-- UPDATE: lambda + map
+let target_update = 1
+let updated = list.map(load(), fn t ->
+  when t.id == target_update -> map.set(t, "done", true)
+  otherwise -> t)
+save(updated)
 
--- ============ UPDATE (mark id 1 as done) ============
-define mark_step taking acc, t ->
-  when t.id == acc.target
-    -> map.set(acc, "out", push(acc.out, map.set(t, "done", true)))
-  otherwise
-    -> map.set(acc, "out", push(acc.out, t))
-
-let u = list.fold(load(), map { target: 1, out: [] }, mark_step)
-save(u.out)
-
-show -> "=== After UPDATE id=1 ==="
+show -> "=== After UPDATE id={target_update} ==="
 for t in load() -> show -> "  [{t.id}] {t.title} | done: {t.done}"
 
--- ============ DELETE (remove id 2) ============
-define delete_step taking acc, t ->
-  when t.id == acc.target -> acc
-  otherwise -> map.set(acc, "out", push(acc.out, t))
+-- DELETE: lambda + filter
+let target_delete = 2
+let remaining = list.filter(load(), fn t -> t.id != target_delete)
+save(remaining)
 
-let d = list.fold(load(), map { target: 2, out: [] }, delete_step)
-save(d.out)
-
-show -> "=== After DELETE id=2 ==="
+show -> "=== After DELETE id={target_delete} ==="
 for t in load() -> show -> "  [{t.id}] {t.title} | done: {t.done}"
