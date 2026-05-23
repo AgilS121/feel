@@ -1,0 +1,37 @@
+-- String escape sequences: \n, \t, \r, \", \\, \{, \}
+
+-- 1. \n produces actual newline
+let nl = "line1\nline2"
+assert length(nl) == 11, "11 chars total"
+let lines = split(nl, "\n")
+assert length(lines) == 2, "split on real newline"
+assert lines[0] == "line1", "first line"
+assert lines[1] == "line2", "second line"
+
+-- 2. \t tab
+let tab = "a\tb"
+assert length(tab) == 3, "3 chars"
+
+-- 3. \" embedded quote
+let with_quote = "she said \"hi\""
+assert contains(with_quote, "hi"), "contains hi"
+assert length(with_quote) == 13, "13 chars total (incl. 2 quotes)"
+
+-- 4. \\ backslash
+let backslash = "C:\\Users"
+assert length(backslash) == 8, "8 chars (one backslash)"
+
+-- 5. \{ and \} literal braces (interpolation skips them)
+let name = "Budi"
+let literal = "Hello \{name\} not interpolated"
+assert literal == "Hello \{name\} not interpolated", "literal braces preserved"
+
+-- Mixed: real interpolation + literal braces
+let mixed = "User \{{name}\} active"
+assert mixed == "User \{Budi\} active", "literal + interpolation"
+
+-- 6. Unknown escape passes the next char through
+let unknown = "\x"
+assert unknown == "x", "unknown escape drops backslash"
+
+show -> "string_escape_test OK"

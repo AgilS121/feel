@@ -253,9 +253,20 @@ class Formatter:
         return str(v)
 
     def _string_lit(self, s):
-        # Re-quote. Existing strings have no backslash escapes in current lexer
-        # (lexer doesn't support escapes). Simply wrap in double-quotes.
-        return f'"{s}"'
+        """Re-emit a string literal with escape sequences for special chars.
+
+        Lexer turned `\\{` into \\x00 etc; we restore the visible form here so
+        formatted output round-trips back to the same AST."""
+        escaped = (
+            s.replace('\\', '\\\\')
+             .replace('"', '\\"')
+             .replace('\n', '\\n')
+             .replace('\t', '\\t')
+             .replace('\r', '\\r')
+             .replace('\x00', '\\{')
+             .replace('\x01', '\\}')
+        )
+        return f'"{escaped}"'
 
 
 def format_source(source, filename='<input>'):

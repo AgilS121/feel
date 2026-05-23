@@ -403,9 +403,16 @@ class GoEmitter:
         return f'any({v!r})'
 
     def _string_literal(self, s):
-        """Emit a Go expression that builds the string, handling {name} interpolation."""
-        # Split into literal parts + interpolation parts
+        """Emit a Go expression that builds the string, handling {name} interpolation.
+
+        Lexer encoded `\\{` and `\\}` as \\x00 / \\x01 so the {...} interpolation
+        regex skips them. We restore literal braces before emitting Go.
+        """
         import re as _re
+
+        def _restore_braces(t):
+            return t.replace('\x00', '{').replace('\x01', '}')
+
         parts = []
         last = 0
         has_interp = False
@@ -413,20 +420,18 @@ class GoEmitter:
             has_interp = True
             literal = s[last:m.start()]
             if literal:
-                parts.append(('lit', literal))
+                parts.append(('lit', _restore_braces(literal)))
             parts.append(('expr', m.group(1).strip()))
             last = m.end()
         if last < len(s):
-            parts.append(('lit', s[last:]))
+            parts.append(('lit', _restore_braces(s[last:])))
         if not has_interp:
-            return f'any({_go_string_lit(s)})'
-        # Use feel_fmt(parts...) which joins with feel_str
+            return f'any({_go_string_lit(_restore_braces(s))})'
         joined = []
         for kind, val in parts:
             if kind == 'lit':
                 joined.append(_go_string_lit(val))
             else:
-                # Parse `val` as a Feel expression
                 sub_tree = parse(val)
                 if not sub_tree.stmts:
                     continue

@@ -3,7 +3,7 @@ import re
 TOKENS = [
     ('COMMENT',   r'--[^\n]*'),
     ('NUMBER',    r'\d+(\.\d+)?'),
-    ('STRING',    r'"[^"]*"'),
+    ('STRING',    r'"(?:[^"\\]|\\.)*"'),
     ('ARROW',     r'->'),
     ('PIPE',      r'\|'),
     ('LBRACE',    r'\{'),
@@ -34,6 +34,30 @@ TOKENS = [
 ]
 
 TOKEN_RE = re.compile('|'.join(f'(?P<{name}>{pattern})' for name, pattern in TOKENS))
+
+
+_ESC = {
+    'n': '\n', 't': '\t', 'r': '\r', '0': '\0',
+    '"': '"', '\\': '\\',
+    '{': '\x00',   # placeholder: literal `{` (interpolator restores after substitution)
+    '}': '\x01',   # placeholder: literal `}`
+}
+
+
+def _unescape(s):
+    """Process \X escape sequences inside a string literal body."""
+    out = []
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if c == '\\' and i + 1 < len(s):
+            n = s[i + 1]
+            out.append(_ESC.get(n, n))   # unknown escape: keep the next char as-is
+            i += 2
+        else:
+            out.append(c)
+            i += 1
+    return ''.join(out)
 
 
 class Token:
@@ -83,7 +107,7 @@ def tokenize(source, filename='<input>', keep_trivia=False):
             value = float(value) if '.' in value else int(value)
             tokens.append(Token('NUMBER', value, line, col, m.start()))
         elif kind == 'STRING':
-            tokens.append(Token('STRING', value[1:-1], line, col, m.start()))
+            tokens.append(Token('STRING', _unescape(value[1:-1]), line, col, m.start()))
         elif kind == 'KEYWORD':
             tokens.append(Token(value.upper(), value, line, col, m.start()))
         else:

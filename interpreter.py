@@ -250,7 +250,12 @@ class Interpreter:
         install_into(self.env)
 
     def _interpolate(self, s):
-        """Replace {expr} di string. Error di dalam {} → FeelError."""
+        """Replace {expr} di string. `\\{` and `\\}` produce literal braces.
+
+        The lexer already turned escaped braces into \\x00 / \\x01 placeholders so
+        the interpolation regex skips them. After substitution we restore the
+        literal characters.
+        """
         def replace(m):
             expr_src = m.group(1).strip()
             sub = parse(expr_src, filename=self.filename)
@@ -258,7 +263,8 @@ class Interpreter:
                 return ''
             val = self.eval_stmt(sub.stmts[0])
             return feel_str(val)
-        return re.sub(r'\{([^}]+)\}', replace, s)
+        result = re.sub(r'\{([^}]+)\}', replace, s)
+        return result.replace('\x00', '{').replace('\x01', '}')
 
     def run(self, source):
         tree = parse(source, filename=self.filename)
