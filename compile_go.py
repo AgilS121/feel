@@ -140,9 +140,12 @@ class GoEmitter:
     def _emit_stmt(self, n):
         """Returns list of Go lines (indented from depth=0; main() adds outer)."""
         if isinstance(n, RecordDef):
-            # Records are dynamic maps in Go — no constructor needed, RecordLiteral
-            # emits the literal directly. Just leave a marker comment.
-            return [f'{self._ind()}// record {n.name} {{ {", ".join(f"{k}: {v}" for k, v in n.fields.items())} }}']
+            # Register the schema at runtime so validate.shape works in compiled mode.
+            ind = self._ind()
+            lines = [f'{ind}// record {n.name} {{ {", ".join(f"{k}: {v}" for k, v in n.fields.items())} }}']
+            entries = ', '.join(f'"{k}": "{v}"' for k, v in n.fields.items())
+            lines.append(f'{ind}feel_record_schemas["{n.name}"] = map[string]string{{{entries}}}')
+            return lines
         if isinstance(n, ThrowStmt):
             return [f'{self._ind()}panic(feel_throw{{value: {self._emit_expr(n.expr)}}})']
         if isinstance(n, TryStmt):
@@ -223,7 +226,8 @@ class GoEmitter:
                 return _safe_name(n.name)
             # Stdlib namespace modules → emit the Go map.
             if n.name in STDLIB_MODULES:
-                if n.name == 'db':
+                # queue is SQLite-backed → also pulls in the sqlite driver
+                if n.name in ('db', 'queue'):
                     self.uses_db = True
                 return f'feel_{n.name}_mod'
             # Builtin used as a value (e.g. in a pipeline) → emit the wrapper.
@@ -455,7 +459,8 @@ BUILTINS_GO = {
 }
 
 STDLIB_MODULES = {'string', 'list', 'map', 'json', 'ai', 'db', 'security', 'crypto',
-                  'auth', 'session', 'cache', 'time', 'math', 'file', 'mail'}
+                  'auth', 'session', 'cache', 'time', 'math', 'file', 'mail',
+                  'validate', 'queue'}
 
 
 def _is_builtin(name):
@@ -2073,6 +2078,242 @@ var feel_file_mod = map[string]any{
 	}),
 }
 
+// ---------- Validate (record schemas) ----------
+
+var feel_record_schemas = map[string]map[string]string{}
+
+func feel_check_type(v any, declared string, depth int) bool {
+	if depth > 8 {
+		return true
+	}
+	switch declared {
+	case "text":
+		_, ok := v.(string); return ok
+	case "number":
+		if _, ok := v.(float64); ok { return true }
+		if _, ok := v.(int); ok { return true }
+		if _, ok := v.(int64); ok { return true }
+		return false
+	case "boolean":
+		_, ok := v.(bool); return ok
+	case "list":
+		_, ok := v.([]any); return ok
+	case "map":
+		_, ok := v.(map[string]any); return ok
+	case "nothing":
+		return v == nil
+	}
+	// Nested record reference
+	if sub, ok := feel_record_schemas[declared]; ok {
+		m, ok := v.(map[string]any)
+		if !ok { return false }
+		for f, t := range sub {
+			vv, present := m[f]
+			if !present || !feel_check_type(vv, t, depth+1) { return false }
+		}
+		return true
+	}
+	return true
+}
+
+func feel_validate_shape(value, recordName any) any {
+	name := feel_str(recordName)
+	schema, ok := feel_record_schemas[name]
+	if !ok {
+		panic(feel_throw{value: any("validate.shape: unknown record '" + name + "'")})
+	}
+	m, ok := value.(map[string]any)
+	if !ok {
+		panic(feel_throw{value: any(fmt.Sprintf("validate.shape: expected map, got %T", value))})
+	}
+	var errs []string
+	for field, typeName := range schema {
+		v, present := m[field]
+		if !present {
+			errs = append(errs, "missing field '" + field + "'")
+			continue
+		}
+		if !feel_check_type(v, typeName, 0) {
+			errs = append(errs, "field '" + field + "' must be " + typeName)
+		}
+	}
+	if len(errs) > 0 {
+		panic(feel_throw{value: any("validation failed: " + strings.Join(errs, "; "))})
+	}
+	return value
+}
+
+func feel_validate_is_valid(value, recordName any) any {
+	defer func() { _ = recover() }()
+	result := any(false)
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				result = any(false)
+			}
+		}()
+		feel_validate_shape(value, recordName)
+		result = any(true)
+	}()
+	return result
+}
+
+func feel_validate_errors_for(value, recordName any) any {
+	out := []any{}
+	defer func() {
+		if r := recover(); r != nil {
+			if ft, ok := r.(feel_throw); ok {
+				msg := feel_str(ft.value)
+				if strings.Contains(msg, "validation failed: ") {
+					list := strings.Split(strings.SplitN(msg, "validation failed: ", 2)[1], "; ")
+					for _, e := range list {
+						out = append(out, any(e))
+					}
+				} else {
+					out = append(out, any(msg))
+				}
+			}
+		}
+	}()
+	feel_validate_shape(value, recordName)
+	return any(out)
+}
+
+var feel_validate_mod = map[string]any{
+	"shape":      any(feel_validate_shape),
+	"is_valid":   any(feel_validate_is_valid),
+	"errors_for": any(feel_validate_errors_for),
+}
+
+// ---------- Queue moved to RUNTIME_GO_DB_BODY (needs feel_db_*) ----------
+/*
+func feel_queue_enqueue_legacy(qconn, name, payload any) any {
+	data, _ := json.Marshal(feel_to_jsonable(payload))
+	feel_db_exec(qconn, any("INSERT INTO jobs (queue_name, payload) VALUES (?, ?)"),
+		any([]any{any(feel_str(name)), any(string(data))}))
+	return feel_db_last_id(qconn)
+}
+
+func feel_queue_pop(qconn, name any) any {
+	feel_db_begin(qconn)
+	defer func() {
+		if r := recover(); r != nil {
+			func() { defer func() { recover() }(); feel_db_rollback(qconn) }()
+			panic(r)
+		}
+	}()
+	row := feel_db_query_one(qconn,
+		any("SELECT id, payload, attempts FROM jobs WHERE queue_name = ? AND status = 'pending' ORDER BY id ASC LIMIT 1"),
+		any([]any{any(feel_str(name))}))
+	if row == nil {
+		feel_db_commit(qconn)
+		return any(nil)
+	}
+	r, _ := row.(map[string]any)
+	id := r["id"]
+	feel_db_exec(qconn,
+		any("UPDATE jobs SET status = 'running', leased_at = CURRENT_TIMESTAMP, attempts = attempts + 1 WHERE id = ?"),
+		any([]any{id}))
+	feel_db_commit(qconn)
+
+	var decoded any
+	if raw, ok := r["payload"].(string); ok {
+		_ = json.Unmarshal([]byte(raw), &decoded)
+		decoded = feel_from_jsonable(decoded)
+	}
+	return any(map[string]any{
+		"id":       id,
+		"payload":  decoded,
+		"attempts": any(feel_num(r["attempts"]) + 1),
+	})
+}
+
+func feel_queue_complete(qconn, jobID any) any {
+	feel_db_exec(qconn, any("DELETE FROM jobs WHERE id = ?"), any([]any{any(int64(feel_num(jobID)))}))
+	return any(true)
+}
+
+func feel_queue_fail(args ...any) any {
+	if len(args) < 3 {
+		panic(feel_throw{value: any("queue.fail: need (qconn, job_id, error [, max_attempts])")})
+	}
+	qconn := args[0]
+	jobID := int64(feel_num(args[1]))
+	errMsg := feel_str(args[2])
+	maxAttempts := 3
+	if len(args) >= 4 {
+		maxAttempts = int(feel_num(args[3]))
+	}
+	row := feel_db_query_one(qconn, any("SELECT attempts FROM jobs WHERE id = ?"), any([]any{any(jobID)}))
+	if row == nil {
+		return any(false)
+	}
+	r, _ := row.(map[string]any)
+	if int(feel_num(r["attempts"])) >= maxAttempts {
+		feel_db_exec(qconn, any("UPDATE jobs SET status = 'failed', last_error = ? WHERE id = ?"),
+			any([]any{any(errMsg), any(jobID)}))
+	} else {
+		feel_db_exec(qconn, any("UPDATE jobs SET status = 'pending', last_error = ?, leased_at = NULL WHERE id = ?"),
+			any([]any{any(errMsg), any(jobID)}))
+	}
+	return any(true)
+}
+
+func feel_queue_pending(qconn, name any) any {
+	row := feel_db_query_one(qconn,
+		any("SELECT COUNT(*) AS n FROM jobs WHERE queue_name = ? AND status = 'pending'"),
+		any([]any{any(feel_str(name))}))
+	if row == nil { return any(float64(0)) }
+	r, _ := row.(map[string]any)
+	return r["n"]
+}
+
+func feel_queue_process_once(qconn, name, handler any) any {
+	job := feel_queue_pop(qconn, name)
+	if job == nil {
+		return any(false)
+	}
+	jm, _ := job.(map[string]any)
+	jobID := jm["id"]
+	payload := jm["payload"]
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				msg := fmt.Sprintf("%v", r)
+				if ft, ok := r.(feel_throw); ok { msg = feel_str(ft.value) }
+				feel_queue_fail(qconn, jobID, any(msg))
+			}
+		}()
+		feel_call(handler, []any{payload})
+		feel_queue_complete(qconn, jobID)
+	}()
+	return any(true)
+}
+
+func feel_queue_work(args ...any) any {
+	if len(args) < 3 {
+		panic(feel_throw{value: any("queue.work: need (qconn, name, handler [, poll_ms])")})
+	}
+	qconn := args[0]
+	name := args[1]
+	handler := args[2]
+	pollMs := 500
+	if len(args) >= 4 {
+		pollMs = int(feel_num(args[3]))
+	}
+	fmt.Fprintf(os.Stderr, "[queue] worker started: queue=%q, poll=%dms\n", feel_str(name), pollMs)
+	for {
+		processed := feel_queue_process_once(qconn, name, handler)
+		if processed != any(true) {
+			time.Sleep(time.Duration(pollMs) * time.Millisecond)
+		}
+	}
+}
+
+var feel_queue_mod_placeholder = map[string]any{}
+*/
+// queue functions moved into RUNTIME_GO_DB_BODY below; feel_queue_mod redefined there.
+
 // ---------- Mail (mock + SMTP) ----------
 
 var feel_mail_lock sync.Mutex
@@ -2706,6 +2947,244 @@ func feel_db_transaction(conn, fn any) any {
 	return result
 }
 
+// ---------- ORM-lite query builder ----------
+
+func feel_db_find(conn, table any) any {
+	return any(map[string]any{
+		"__qtype__": any("query"),
+		"conn":      conn,
+		"table":     any(feel_str(table)),
+		"wheres":    any([]any{}),
+		"order":     any(nil),
+		"limit":     any(float64(-1)),
+		"offset":    any(float64(-1)),
+	})
+}
+
+func feel_is_query(v any) bool {
+	m, ok := v.(map[string]any)
+	if !ok { return false }
+	qt, _ := m["__qtype__"].(string)
+	return qt == "query"
+}
+
+func feel_q_add_where(q, col, op, val any) any {
+	qm, _ := q.(map[string]any)
+	wheres, _ := qm["wheres"].([]any)
+	wheres = append(wheres, any([]any{col, op, val}))
+	qm["wheres"] = any(wheres)
+	return q
+}
+
+func feel_q_set_order(q, col, dir any) any {
+	qm, _ := q.(map[string]any)
+	d := strings.ToUpper(feel_str(dir))
+	if d != "DESC" { d = "ASC" }
+	qm["order"] = any([]any{any(feel_str(col)), any(d)})
+	return q
+}
+
+func feel_db_where(args ...any) any {
+	if len(args) >= 1 && feel_is_query(args[0]) {
+		return feel_q_add_where(args[0], args[1], args[2], args[3])
+	}
+	if len(args) != 3 {
+		panic(feel_throw{value: any("where: expected (col, op, val)")})
+	}
+	col, op, val := args[0], args[1], args[2]
+	return any(func(q any) any { return feel_q_add_where(q, col, op, val) })
+}
+
+func feel_db_order_by(args ...any) any {
+	if len(args) >= 1 && feel_is_query(args[0]) {
+		col := args[1]
+		dir := any("ASC")
+		if len(args) >= 3 { dir = args[2] }
+		return feel_q_set_order(args[0], col, dir)
+	}
+	col := args[0]
+	dir := any("ASC")
+	if len(args) >= 2 { dir = args[1] }
+	return any(func(q any) any { return feel_q_set_order(q, col, dir) })
+}
+
+func feel_db_take(args ...any) any {
+	if len(args) >= 1 && feel_is_query(args[0]) {
+		qm, _ := args[0].(map[string]any)
+		qm["limit"] = any(float64(int(feel_num(args[1]))))
+		return args[0]
+	}
+	n := int(feel_num(args[0]))
+	return any(func(q any) any {
+		qm, _ := q.(map[string]any)
+		qm["limit"] = any(float64(n))
+		return q
+	})
+}
+
+func feel_db_offset(args ...any) any {
+	if len(args) >= 1 && feel_is_query(args[0]) {
+		qm, _ := args[0].(map[string]any)
+		qm["offset"] = any(float64(int(feel_num(args[1]))))
+		return args[0]
+	}
+	n := int(feel_num(args[0]))
+	return any(func(q any) any {
+		qm, _ := q.(map[string]any)
+		qm["offset"] = any(float64(n))
+		return q
+	})
+}
+
+func feel_db_build_sql(qm map[string]any) (string, []any) {
+	table := feel_str(qm["table"])
+	sql := "SELECT * FROM " + table
+	var params []any
+	wheres, _ := qm["wheres"].([]any)
+	if len(wheres) > 0 {
+		parts := []string{}
+		for _, w := range wheres {
+			t, _ := w.([]any)
+			col := feel_str(t[0])
+			op := strings.ToUpper(feel_str(t[1]))
+			val := t[2]
+			if val == nil && op == "IS" {
+				parts = append(parts, col+" IS NULL")
+			} else if val == nil && (op == "IS NOT" || op == "IS_NOT") {
+				parts = append(parts, col+" IS NOT NULL")
+			} else {
+				parts = append(parts, col+" "+op+" ?")
+				params = append(params, val)
+			}
+		}
+		sql += " WHERE " + strings.Join(parts, " AND ")
+	}
+	if order, ok := qm["order"].([]any); ok && order != nil && len(order) >= 2 {
+		sql += " ORDER BY " + feel_str(order[0]) + " " + feel_str(order[1])
+	}
+	if limit, ok := qm["limit"].(float64); ok && limit >= 0 {
+		sql += fmt.Sprintf(" LIMIT %d", int(limit))
+	}
+	if off, ok := qm["offset"].(float64); ok && off >= 0 {
+		sql += fmt.Sprintf(" OFFSET %d", int(off))
+	}
+	return sql, params
+}
+
+func feel_db_all(q any) any {
+	if !feel_is_query(q) { panic(feel_throw{value: any("all: expected a query")}) }
+	qm, _ := q.(map[string]any)
+	sql, params := feel_db_build_sql(qm)
+	return feel_db_query(qm["conn"], any(sql), any(params))
+}
+
+func feel_db_first(q any) any {
+	if !feel_is_query(q) { panic(feel_throw{value: any("first: expected a query")}) }
+	qm, _ := q.(map[string]any)
+	// Clone shallow: set limit=1 on a copy
+	clone := map[string]any{}
+	for k, v := range qm { clone[k] = v }
+	clone["limit"] = any(float64(1))
+	sql, params := feel_db_build_sql(clone)
+	rows, _ := feel_db_query(qm["conn"], any(sql), any(params)).([]any)
+	if len(rows) > 0 { return rows[0] }
+	return any(nil)
+}
+
+func feel_db_count(q any) any {
+	if !feel_is_query(q) { panic(feel_throw{value: any("count: expected a query")}) }
+	qm, _ := q.(map[string]any)
+	sql := "SELECT COUNT(*) AS n FROM " + feel_str(qm["table"])
+	var params []any
+	wheres, _ := qm["wheres"].([]any)
+	if len(wheres) > 0 {
+		parts := []string{}
+		for _, w := range wheres {
+			t, _ := w.([]any)
+			col := feel_str(t[0]); op := strings.ToUpper(feel_str(t[1])); val := t[2]
+			if val == nil && op == "IS" {
+				parts = append(parts, col+" IS NULL")
+			} else if val == nil && (op == "IS NOT" || op == "IS_NOT") {
+				parts = append(parts, col+" IS NOT NULL")
+			} else {
+				parts = append(parts, col+" "+op+" ?")
+				params = append(params, val)
+			}
+		}
+		sql += " WHERE " + strings.Join(parts, " AND ")
+	}
+	row := feel_db_query_one(qm["conn"], any(sql), any(params))
+	if row == nil { return any(float64(0)) }
+	r, _ := row.(map[string]any)
+	return r["n"]
+}
+
+func feel_db_paginate(args ...any) any {
+	var qm map[string]any
+	var page, perPage int
+	if len(args) >= 3 && feel_is_query(args[0]) {
+		qm, _ = args[0].(map[string]any)
+		page = int(feel_num(args[1]))
+		perPage = int(feel_num(args[2]))
+		return feel_db_paginate_impl(qm, page, perPage)
+	}
+	if len(args) == 2 {
+		page = int(feel_num(args[0]))
+		perPage = int(feel_num(args[1]))
+		return any(func(q any) any {
+			qm2, _ := q.(map[string]any)
+			return feel_db_paginate_impl(qm2, page, perPage)
+		})
+	}
+	panic(feel_throw{value: any("paginate: expected (page, per_page) or (query, page, per_page)")})
+}
+
+func feel_db_paginate_impl(qm map[string]any, page, perPage int) any {
+	if page < 1 { page = 1 }
+	if perPage < 1 { perPage = 1 }
+	// Count
+	clone := map[string]any{}
+	for k, v := range qm { clone[k] = v }
+	clone["limit"] = any(float64(-1))
+	clone["offset"] = any(float64(-1))
+	total := int(feel_num(feel_db_count(any(clone))))
+	// Page
+	clone["limit"] = any(float64(perPage))
+	clone["offset"] = any(float64((page - 1) * perPage))
+	sql, params := feel_db_build_sql(clone)
+	items := feel_db_query(qm["conn"], any(sql), any(params))
+	totalPages := 0
+	if perPage > 0 { totalPages = (total + perPage - 1) / perPage }
+	return any(map[string]any{
+		"items":       items,
+		"total":       any(float64(total)),
+		"page":        any(float64(page)),
+		"per_page":    any(float64(perPage)),
+		"total_pages": any(float64(totalPages)),
+	})
+}
+
+func feel_db_touch(args ...any) any {
+	conn := args[0]; table := feel_str(args[1]); id := args[2]
+	col := "updated_at"
+	if len(args) >= 4 { col = feel_str(args[3]) }
+	return feel_db_exec(conn, any("UPDATE "+table+" SET "+col+" = CURRENT_TIMESTAMP WHERE id = ?"), any([]any{id}))
+}
+
+func feel_db_soft_delete(args ...any) any {
+	conn := args[0]; table := feel_str(args[1]); id := args[2]
+	col := "deleted_at"
+	if len(args) >= 4 { col = feel_str(args[3]) }
+	return feel_db_exec(conn, any("UPDATE "+table+" SET "+col+" = CURRENT_TIMESTAMP WHERE id = ?"), any([]any{id}))
+}
+
+func feel_db_restore(args ...any) any {
+	conn := args[0]; table := feel_str(args[1]); id := args[2]
+	col := "deleted_at"
+	if len(args) >= 4 { col = feel_str(args[3]) }
+	return feel_db_exec(conn, any("UPDATE "+table+" SET "+col+" = NULL WHERE id = ?"), any([]any{id}))
+}
+
 var feel_db_mod = map[string]any{
 	"connect":     any(feel_db_connect),
 	"exec":        any(feel_db_exec),
@@ -2717,6 +3196,169 @@ var feel_db_mod = map[string]any{
 	"commit":      any(feel_db_commit),
 	"rollback":    any(feel_db_rollback),
 	"transaction": any(feel_db_transaction),
+	"find":        any(feel_db_find),
+	"where":       any(feel_db_where),
+	"order_by":    any(feel_db_order_by),
+	"take":        any(feel_db_take),
+	"offset":      any(feel_db_offset),
+	"all":         any(feel_db_all),
+	"first":       any(feel_db_first),
+	"count":       any(feel_db_count),
+	"paginate":    any(feel_db_paginate),
+	"touch":       any(feel_db_touch),
+	"soft_delete": any(feel_db_soft_delete),
+	"restore":     any(feel_db_restore),
+}
+
+// ---------- Queue (SQLite-backed jobs) — defined here so it sits in the conditional db block ----------
+
+func feel_queue_connect(path any) any {
+	conn := feel_db_connect(path)
+	feel_db_exec(conn, any(`CREATE TABLE IF NOT EXISTS jobs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		queue_name TEXT NOT NULL,
+		payload TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'pending',
+		attempts INTEGER NOT NULL DEFAULT 0,
+		last_error TEXT,
+		leased_at TEXT,
+		created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`))
+	feel_db_exec(conn, any("CREATE INDEX IF NOT EXISTS idx_jobs_queue_status ON jobs(queue_name, status)"))
+	return conn
+}
+
+func feel_queue_enqueue(qconn, name, payload any) any {
+	data, _ := json.Marshal(feel_to_jsonable(payload))
+	feel_db_exec(qconn, any("INSERT INTO jobs (queue_name, payload) VALUES (?, ?)"),
+		any([]any{any(feel_str(name)), any(string(data))}))
+	return feel_db_last_id(qconn)
+}
+
+func feel_queue_pop(qconn, name any) any {
+	feel_db_begin(qconn)
+	defer func() {
+		if r := recover(); r != nil {
+			func() { defer func() { recover() }(); feel_db_rollback(qconn) }()
+			panic(r)
+		}
+	}()
+	row := feel_db_query_one(qconn,
+		any("SELECT id, payload, attempts FROM jobs WHERE queue_name = ? AND status = 'pending' ORDER BY id ASC LIMIT 1"),
+		any([]any{any(feel_str(name))}))
+	if row == nil {
+		feel_db_commit(qconn)
+		return any(nil)
+	}
+	r, _ := row.(map[string]any)
+	id := r["id"]
+	feel_db_exec(qconn,
+		any("UPDATE jobs SET status = 'running', leased_at = CURRENT_TIMESTAMP, attempts = attempts + 1 WHERE id = ?"),
+		any([]any{id}))
+	feel_db_commit(qconn)
+	var decoded any
+	if raw, ok := r["payload"].(string); ok {
+		_ = json.Unmarshal([]byte(raw), &decoded)
+		decoded = feel_from_jsonable(decoded)
+	}
+	return any(map[string]any{
+		"id":       id,
+		"payload":  decoded,
+		"attempts": any(feel_num(r["attempts"]) + 1),
+	})
+}
+
+func feel_queue_complete(qconn, jobID any) any {
+	feel_db_exec(qconn, any("DELETE FROM jobs WHERE id = ?"), any([]any{any(int64(feel_num(jobID)))}))
+	return any(true)
+}
+
+func feel_queue_fail(args ...any) any {
+	if len(args) < 3 {
+		panic(feel_throw{value: any("queue.fail: need (qconn, job_id, error [, max_attempts])")})
+	}
+	qconn := args[0]
+	jobID := int64(feel_num(args[1]))
+	errMsg := feel_str(args[2])
+	maxAttempts := 3
+	if len(args) >= 4 {
+		maxAttempts = int(feel_num(args[3]))
+	}
+	row := feel_db_query_one(qconn, any("SELECT attempts FROM jobs WHERE id = ?"), any([]any{any(jobID)}))
+	if row == nil {
+		return any(false)
+	}
+	r, _ := row.(map[string]any)
+	if int(feel_num(r["attempts"])) >= maxAttempts {
+		feel_db_exec(qconn, any("UPDATE jobs SET status = 'failed', last_error = ? WHERE id = ?"),
+			any([]any{any(errMsg), any(jobID)}))
+	} else {
+		feel_db_exec(qconn, any("UPDATE jobs SET status = 'pending', last_error = ?, leased_at = NULL WHERE id = ?"),
+			any([]any{any(errMsg), any(jobID)}))
+	}
+	return any(true)
+}
+
+func feel_queue_pending(qconn, name any) any {
+	row := feel_db_query_one(qconn,
+		any("SELECT COUNT(*) AS n FROM jobs WHERE queue_name = ? AND status = 'pending'"),
+		any([]any{any(feel_str(name))}))
+	if row == nil { return any(float64(0)) }
+	r, _ := row.(map[string]any)
+	return r["n"]
+}
+
+func feel_queue_process_once(qconn, name, handler any) any {
+	job := feel_queue_pop(qconn, name)
+	if job == nil {
+		return any(false)
+	}
+	jm, _ := job.(map[string]any)
+	jobID := jm["id"]
+	payload := jm["payload"]
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				msg := fmt.Sprintf("%v", r)
+				if ft, ok := r.(feel_throw); ok { msg = feel_str(ft.value) }
+				feel_queue_fail(qconn, jobID, any(msg))
+			}
+		}()
+		feel_call(handler, []any{payload})
+		feel_queue_complete(qconn, jobID)
+	}()
+	return any(true)
+}
+
+func feel_queue_work(args ...any) any {
+	if len(args) < 3 {
+		panic(feel_throw{value: any("queue.work: need (qconn, name, handler [, poll_ms])")})
+	}
+	qconn := args[0]
+	name := args[1]
+	handler := args[2]
+	pollMs := 500
+	if len(args) >= 4 {
+		pollMs = int(feel_num(args[3]))
+	}
+	fmt.Fprintf(os.Stderr, "[queue] worker started: queue=%q, poll=%dms\n", feel_str(name), pollMs)
+	for {
+		processed := feel_queue_process_once(qconn, name, handler)
+		if processed != any(true) {
+			time.Sleep(time.Duration(pollMs) * time.Millisecond)
+		}
+	}
+}
+
+var feel_queue_mod = map[string]any{
+	"connect":      any(feel_queue_connect),
+	"enqueue":      any(feel_queue_enqueue),
+	"pop":          any(feel_queue_pop),
+	"complete":     any(feel_queue_complete),
+	"fail":         any(feel_queue_fail),
+	"pending":      any(feel_queue_pending),
+	"process_once": any(feel_queue_process_once),
+	"work":         any(feel_queue_work),
 }
 '''
 

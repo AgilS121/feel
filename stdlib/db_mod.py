@@ -370,8 +370,14 @@ def _build_sql(q):
     if q.wheres:
         parts = []
         for col, op, val in q.wheres:
-            parts.append(f'{col} {op} ?')
-            params.append(val)
+            # Special-case IS NULL / IS NOT NULL when val is None
+            if val is None and op.upper() == 'IS':
+                parts.append(f'{col} IS NULL')
+            elif val is None and op.upper() in ('IS NOT', 'IS_NOT'):
+                parts.append(f'{col} IS NOT NULL')
+            else:
+                parts.append(f'{col} {op} ?')
+                params.append(val)
         sql += ' WHERE ' + ' AND '.join(parts)
     if q.order:
         sql += f' ORDER BY {q.order[0]} {q.order[1]}'
@@ -417,13 +423,71 @@ def count(q):
     return rows[0]['n'] if rows else 0
 
 
+def _paginate_impl(q, page, per_page):
+    page = max(1, int(page))
+    per_page = max(1, int(per_page))
+    total = count(q.clone())
+    q2 = q.clone()
+    q2.limit_n = per_page
+    q2.offset_n = (page - 1) * per_page
+    sql, params = _build_sql(q2)
+    items = query(q.conn, sql, params)
+    total_pages = (total + per_page - 1) // per_page if per_page > 0 else 0
+    return {
+        'items': items,
+        'total': total,
+        'page': page,
+        'per_page': per_page,
+        'total_pages': total_pages,
+    }
+
+
+def paginate(*args):
+    """db.paginate(query, page, per_page)   -- direct
+       db.paginate(page, per_page)           -- curried for pipelines
+
+    Returns: map { items, total, page, per_page, total_pages }
+    """
+    if args and _is_query(args[0]):
+        if len(args) != 3:
+            raise ValueError("paginate: expected (query, page, per_page)")
+        return _paginate_impl(args[0], args[1], args[2])
+    if len(args) == 2:
+        page, per_page = args
+        return lambda q: _paginate_impl(q, page, per_page)
+    raise ValueError("paginate: expected (page, per_page) or (query, page, per_page)")
+
+
+def touch(conn, table, id_value, column='updated_at'):
+    """Set <column> = CURRENT_TIMESTAMP for a row. Convenience for updated_at."""
+    sql = f'UPDATE {table} SET {column} = CURRENT_TIMESTAMP WHERE id = ?'
+    return exec_(conn, sql, [id_value])
+
+
+def soft_delete(conn, table, id_value, column='deleted_at'):
+    """Set <column> = CURRENT_TIMESTAMP — marks a row deleted without removing it.
+    Apps filter via WHERE <column> IS NULL."""
+    sql = f'UPDATE {table} SET {column} = CURRENT_TIMESTAMP WHERE id = ?'
+    return exec_(conn, sql, [id_value])
+
+
+def restore(conn, table, id_value, column='deleted_at'):
+    """Undo a soft delete."""
+    sql = f'UPDATE {table} SET {column} = NULL WHERE id = ?'
+    return exec_(conn, sql, [id_value])
+
+
 EXPORTS.update({
-    'find':     find,
-    'where':    where,
-    'order_by': order_by,
-    'take':     take,
-    'offset':   offset,
-    'all':      all_,
-    'first':    first,
-    'count':    count,
+    'find':        find,
+    'where':       where,
+    'order_by':    order_by,
+    'take':        take,
+    'offset':      offset,
+    'all':         all_,
+    'first':       first,
+    'count':       count,
+    'paginate':    paginate,
+    'touch':       touch,
+    'soft_delete': soft_delete,
+    'restore':     restore,
 })

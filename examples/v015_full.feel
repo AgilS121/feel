@@ -1,0 +1,31 @@
+-- v0.15: full feature compile check — ORM + pagination + soft delete + touch.
+
+let conn = db.connect(":memory:")
+db.exec(conn, "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT, value INTEGER, deleted_at TEXT, updated_at TEXT)")
+
+for i in list.range(1, 11) ->
+  db.exec(conn, "INSERT INTO items (name, value) VALUES (?, ?)", ["item-{i}", i * 10])
+
+-- Pagination
+let page = db.find(conn, "items") | db.order_by("id") | db.paginate(1, 3)
+show -> page.total
+show -> length(page.items)
+show -> page.items[0].name
+
+-- ORM where + count
+let big = db.find(conn, "items") | db.where("value", ">", 50) | db.count
+show -> big
+
+-- Soft delete + active filter
+db.soft_delete(conn, "items", 1)
+db.soft_delete(conn, "items", 2)
+let active = db.find(conn, "items") | db.where("deleted_at", "IS", nothing) | db.count
+show -> active
+
+-- Touch
+db.touch(conn, "items", 5)
+let touched = db.query_one(conn, "SELECT updated_at FROM items WHERE id = ?", [5])
+show -> touched.updated_at != nothing
+
+db.close(conn)
+show -> "v015_full OK"

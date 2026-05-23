@@ -1,0 +1,25 @@
+-- v0.15: validate + queue compile to Go.
+
+-- 1. Validate from compiled binary
+record CreateEmployee { name: text, email: text, age: number }
+
+let good = validate.shape(map { name: "Budi", email: "b@x.com", age: 25 }, "CreateEmployee")
+show -> good.name
+
+let r = try validate.shape(map { name: "X", age: "twenty" }, "CreateEmployee") catch err -> err
+show -> contains(r, "missing field")
+
+-- 2. Queue (SQLite-backed in same binary)
+let q = queue.connect(":memory:")
+queue.enqueue(q, "emails", map { to: "a@x.com", subject: "Hi A" })
+queue.enqueue(q, "emails", map { to: "b@x.com", subject: "Hi B" })
+
+show -> queue.pending(q, "emails")
+
+let job = queue.pop(q, "emails")
+show -> job.payload.to
+queue.complete(q, job.id)
+
+show -> queue.pending(q, "emails")
+
+show -> "v015_demo OK"

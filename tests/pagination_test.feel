@@ -1,0 +1,50 @@
+-- Pagination + soft delete + touch helpers
+
+let conn = db.connect(":memory:")
+db.exec(conn, "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT, deleted_at TEXT, updated_at TEXT)")
+
+-- Seed 25 items
+for i in list.range(1, 26) ->
+  db.exec(conn, "INSERT INTO items (name) VALUES (?)", ["item-{i}"])
+
+-- Pagination
+let page1 = db.find(conn, "items") | db.order_by("id") | db.paginate(1, 10)
+assert page1.total == 25, "total 25"
+assert length(page1.items) == 10, "10 items on page 1"
+assert page1.page == 1, "page 1"
+assert page1.total_pages == 3, "3 total pages"
+assert page1.items[0].name == "item-1", "first item"
+
+let page2 = db.find(conn, "items") | db.order_by("id") | db.paginate(2, 10)
+assert page2.items[0].name == "item-11", "page 2 starts at 11"
+
+let page3 = db.find(conn, "items") | db.order_by("id") | db.paginate(3, 10)
+assert length(page3.items) == 5, "page 3 has 5"
+
+-- Touch (updated_at)
+db.touch(conn, "items", 1)
+let touched = db.query_one(conn, "SELECT updated_at FROM items WHERE id = ?", [1])
+assert touched.updated_at != nothing, "updated_at set"
+
+-- Soft delete
+db.soft_delete(conn, "items", 5)
+let deleted = db.query_one(conn, "SELECT deleted_at FROM items WHERE id = ?", [5])
+assert deleted.deleted_at != nothing, "deleted_at set"
+
+-- Row still exists in DB
+let still_there = db.query_one(conn, "SELECT id FROM items WHERE id = ?", [5])
+assert still_there.id == 5, "row not removed"
+
+-- Restore
+db.restore(conn, "items", 5)
+let restored = db.query_one(conn, "SELECT deleted_at FROM items WHERE id = ?", [5])
+assert restored.deleted_at == nothing, "deleted_at cleared"
+
+-- Active filter pattern (manual where clause)
+db.soft_delete(conn, "items", 1)
+db.soft_delete(conn, "items", 2)
+let active_count = db.find(conn, "items") | db.where("deleted_at", "IS", nothing) | db.count
+assert active_count == 23, "23 active (25 - 2 deleted)"
+
+db.close(conn)
+show -> "pagination_test OK"
