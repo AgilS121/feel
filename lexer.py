@@ -28,7 +28,7 @@ TOKENS = [
     ('RBRACKET',  r'\]'),
     ('NEWLINE',   r'\n'),
     ('SKIP',      r'[ \t\r]+'),
-    ('KEYWORD',   r'\b(let|define|taking|show|record|when|otherwise|repeat|times|for|in|and|or|not|true|false|nothing|try|catch|throw|map|import|from|expose|assert|fn|do|route|respond|serve|on|expects|tool|agent|cors|GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b'),
+    ('KEYWORD',   r'\b(let|define|taking|show|record|when|otherwise|repeat|times|for|in|and|or|not|true|false|nothing|try|catch|throw|map|import|from|expose|assert|fn|do|route|respond|serve|on|expects|tool|agent|cors|tls|static|GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|WS)\b'),
     ('IDENT',     r'[a-zA-Z_][a-zA-Z0-9_]*'),
     ('MISMATCH',  r'.'),
 ]

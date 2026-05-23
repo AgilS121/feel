@@ -44,10 +44,30 @@ class RouteRegistry:
     def __init__(self):
         # routes: list of (method, pattern_string, compiled_regex, param_names, handler)
         self.routes = []
+        # static mounts: list of (url_prefix, fs_dir) — matched only on GET if no route hits
+        self.static_mounts = []
 
     def register(self, method, pattern, handler):
         compiled, param_names = compile_pattern(pattern)
         self.routes.append((method.upper(), pattern, compiled, param_names, handler))
+
+    def mount_static(self, url_prefix, fs_dir):
+        """Mount fs_dir at url_prefix. Longer prefixes are matched first."""
+        # Normalize: strip trailing slash on prefix; keep leading slash.
+        if not url_prefix.startswith('/'):
+            url_prefix = '/' + url_prefix
+        url_prefix = url_prefix.rstrip('/') or '/'
+        self.static_mounts.append((url_prefix, fs_dir))
+        # Sort descending by prefix length so /static/admin beats /static.
+        self.static_mounts.sort(key=lambda m: -len(m[0]))
+
+    def match_static(self, path):
+        """Return (url_prefix, fs_dir, sub_path) if path matches a mounted prefix, else None."""
+        for prefix, fs_dir in self.static_mounts:
+            if prefix == '/' or path == prefix or path.startswith(prefix + '/'):
+                sub = path[len(prefix):].lstrip('/')
+                return (prefix, fs_dir, sub)
+        return None
 
     def resolve(self, method, path):
         """Returns (handler, params_dict) on match, (None, 'method_mismatch') if path matches
@@ -75,6 +95,7 @@ class RouteRegistry:
 
     def clear(self):
         self.routes.clear()
+        self.static_mounts.clear()
 
 
 # Module-level singleton — interpreter sticks routes here, server reads them

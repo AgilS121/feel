@@ -1,0 +1,27 @@
+-- Feel: orders list endpoint with 5-table JOIN.
+-- Returns top 100 orders with user, customer, contact, invoice info.
+
+let conn = db.connect("orders.db")
+
+let sql = "
+  SELECT
+    o.id, o.total, o.created_at,
+    u.name AS user_name,
+    c.name AS customer_name,
+    ct.name AS contact_name,
+    i.status AS invoice_status
+  FROM orders o
+  JOIN users u      ON u.id = o.user_id
+  JOIN customers c  ON c.id = o.customer_id
+  JOIN contacts ct  ON ct.id = o.contact_id
+  JOIN invoices i   ON i.id = o.invoice_id
+  ORDER BY o.id DESC
+  LIMIT 100
+"
+
+route GET "/orders" -> do {
+  let rows = db.query(conn, sql)
+  respond rows
+}
+
+serve on 4001

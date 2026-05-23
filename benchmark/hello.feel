@@ -1,0 +1,3 @@
+-- Feel HTTP hello server (benchmark)
+route GET "/hello" -> respond "Hello, World"
+serve on 3002

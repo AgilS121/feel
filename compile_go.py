@@ -37,7 +37,8 @@ from parser import (
     Literal, Ident, ArrowExpr, Pipeline, Lambda, Block,
     MapLiteral, ListLiteral, RecordDef, RecordLiteral,
     TryStmt, ThrowStmt, CatchStep,
-    RouteDecl, RespondExpr, ServeStmt, ToolDecl, AgentDecl,
+    RouteDecl, RespondExpr, ServeStmt, StaticDecl, ToolDecl, AgentDecl,
+    ImportStmt,
 )
 from errors import FeelError
 
@@ -48,12 +49,15 @@ INDENT = '\t'  # Go convention: tabs
 class GoEmitter:
     """Walks Feel AST and emits Go source."""
 
-    def __init__(self):
+    def __init__(self, search_paths=None):
         self.depth = 0
         self.var_counter = 0
-        self.scopes = [set()]   # stack of sets of bound names
-        self.uses_db = False    # tracked so build_feel can decide whether to
-                                # add modernc.org/sqlite to go.mod
+        self.scopes = [set()]
+        self.uses_db = False
+        self.uses_ws = False
+        self.search_paths = search_paths or []
+        self.loaded_modules = {}   # name -> emitted module init lines
+        self.module_order = []      # ordered list of module names for emission
 
     def _ind(self):
         return INDENT * self.depth
@@ -83,8 +87,12 @@ class GoEmitter:
 
     def _emit_route(self, n):
         params = self._extract_path_params(n.path)
-        # Handler scope: request, body, query (magic vars) + path params
+        if n.method == 'WS':
+            self.uses_ws = True
+        # Handler scope: request, body, query (magic vars) + path params + ws for WS routes
         scope_names = ['request', 'body', 'query'] + params
+        if n.method == 'WS':
+            scope_names = scope_names + ['ws']
         self._scope_push(scope_names)
         handler_expr = self._emit_expr(n.handler)
         self._scope_pop()
@@ -93,6 +101,8 @@ class GoEmitter:
                     'query := scope["query"]; _ = query']
         for p in params:
             bindings.append(f'{_safe_name(p)} := scope["{_escape(p)}"]; _ = {_safe_name(p)}')
+        if n.method == 'WS':
+            bindings.append('ws := scope["ws"]; _ = ws')
         ind = self._ind()
         joined = ('\n' + ind + '\t\t').join(bindings)
         return [
@@ -133,7 +143,79 @@ class GoEmitter:
             if stmt is None:
                 continue
             body.extend(self._emit_stmt(stmt))
+        # Modules are emitted via _emit_stmt(ImportStmt) — they show up inline
+        # at first import site. That's fine because Go is single-pass for vars
+        # in the same function scope.
         return '\n'.join(body)
+
+    def _resolve_module(self, name):
+        """Find ./<name>.feel under search_paths. Returns absolute path or None."""
+        import os
+        for base in self.search_paths:
+            candidate = os.path.join(base, f'{name}.feel')
+            if os.path.isfile(candidate):
+                return os.path.abspath(candidate)
+        return None
+
+    def _emit_module_loader(self, mod_name):
+        """Emit a Go closure that runs the module body and returns its top-level
+        bindings as a map[string]any. Returned as a list of Go lines suitable
+        for emission at depth `self.depth`.
+        """
+        if mod_name in self.loaded_modules:
+            return []  # already emitted somewhere upstream
+
+        path = self._resolve_module(mod_name)
+        if path is None:
+            raise FeelError.runtime(
+                Literal(None),
+                f"module '{mod_name}' not found",
+                hint=f"searched in: {', '.join(self.search_paths) or '(no paths)'}",
+            )
+
+        with open(path, encoding='utf-8') as f:
+            src = f.read()
+        mod_tree = parse(src, filename=path)
+
+        # Collect top-level let / define names so we can build the returned map.
+        exported = []
+        for st in mod_tree.stmts:
+            if isinstance(st, LetStmt):
+                exported.append(st.name)
+            elif isinstance(st, DefineStmt):
+                exported.append(st.name)
+            elif isinstance(st, RecordDef):
+                pass  # record schemas are global
+
+        # Emit module body as an IIFE that returns the map.
+        ind = self._ind()
+        lines = [f'{ind}// --- imported module: {mod_name} ({path}) ---']
+        lines.append(f'{ind}{_safe_name(mod_name)} := func() map[string]any {{')
+
+        sub_emitter = GoEmitter(search_paths=self.search_paths)
+        sub_emitter.depth = self.depth + 1
+        sub_emitter.uses_db = self.uses_db
+        # Inherit already-loaded modules so nested imports dedupe.
+        sub_emitter.loaded_modules = self.loaded_modules
+        for st in mod_tree.stmts:
+            if st is None:
+                continue
+            lines.extend(sub_emitter._emit_stmt(st))
+        # Anything the sub-emitter learned propagates up
+        self.uses_db = self.uses_db or sub_emitter.uses_db
+
+        # Return map of exported names
+        inner_ind = INDENT * (self.depth + 1)
+        lines.append(f'{inner_ind}return map[string]any{{')
+        for name in exported:
+            lines.append(f'{inner_ind}{INDENT}"{name}": any({_safe_name(name)}),')
+        lines.append(f'{inner_ind}}}')
+        lines.append(f'{ind}}}()')
+        lines.append(f'{ind}_ = {_safe_name(mod_name)}')
+
+        self.loaded_modules[mod_name] = True
+        self.module_order.append(mod_name)
+        return lines
 
     # ---------- Statements ----------
 
@@ -155,11 +237,30 @@ class GoEmitter:
             return self._emit_route(n)
         if isinstance(n, ServeStmt):
             cors = 'true' if n.cors else 'false'
-            return [f'{self._ind()}feel_serve_http({n.port}, {cors})']
+            cert = _go_string_lit(n.cert_file) if n.cert_file else '""'
+            key = _go_string_lit(n.key_file) if n.key_file else '""'
+            return [f'{self._ind()}feel_serve_http({n.port}, {cors}, {cert}, {key})']
+        if isinstance(n, StaticDecl):
+            prefix = _go_string_lit(n.url_prefix)
+            fs_dir = _go_string_lit(n.fs_dir)
+            return [f'{self._ind()}feel_mount_static({prefix}, {fs_dir})']
         if isinstance(n, ToolDecl):
             return self._emit_tool(n)
         if isinstance(n, AgentDecl):
             return self._emit_agent(n)
+        if isinstance(n, ImportStmt):
+            ind = self._ind()
+            lines = self._emit_module_loader(n.name)
+            if n.expose:
+                for nm in n.expose:
+                    self._scope_add(nm)
+                    lines.append(
+                        f'{ind}{_safe_name(nm)} := feel_field({_safe_name(n.name)}, "{nm}")'
+                    )
+                    lines.append(f'{ind}_ = {_safe_name(nm)}')
+            else:
+                self._scope_add(n.name)
+            return lines
         if isinstance(n, LetStmt):
             value = self._emit_expr(n.value)
             self._scope_add(n.name)
@@ -313,7 +414,7 @@ class GoEmitter:
                 lines.append('; '.join(self._inline_stmt(s)))
             last = stmts[-1] if stmts else None
             stmt_types = (LetStmt, DefineStmt, ShowStmt, RepeatStmt, ForStmt,
-                          RouteDecl, ServeStmt, ToolDecl, AgentDecl)
+                          RouteDecl, ServeStmt, StaticDecl, ToolDecl, AgentDecl)
             if last is None:
                 last_expr = 'any(nil)'
             elif isinstance(last, stmt_types):
@@ -371,6 +472,17 @@ class GoEmitter:
             return [f'{_safe_name(n.name)} := func({params}) any {{ return {body} }}', f'_ = {_safe_name(n.name)}']
         if isinstance(n, ShowStmt):
             return [f'feel_show({self._emit_expr(n.expr)})']
+        if isinstance(n, RepeatStmt):
+            count = self._emit_expr(n.count)
+            body_stmts = '; '.join(self._inline_stmt(_as_stmt(n.body)))
+            return [f'for __i := 0; __i < int(feel_num({count})); __i++ {{ {body_stmts} }}']
+        if isinstance(n, ForStmt):
+            iterable = self._emit_expr(n.iterable)
+            var = _safe_name(n.var)
+            self._scope_push([n.var])
+            body_stmts = '; '.join(self._inline_stmt(_as_stmt(n.body)))
+            self._scope_pop()
+            return [f'for _, {var} := range feel_iter({iterable}) {{ _ = {var}; {body_stmts} }}']
         return [f'_ = {self._emit_expr(n)}']
 
     def _eval_key(self, key_node):
@@ -400,7 +512,11 @@ class GoEmitter:
         if v is None: return 'any(nil)'
         if v is True: return 'any(true)'
         if v is False: return 'any(false)'
-        if isinstance(v, (int, float)):
+        if isinstance(v, bool):  # belt + suspenders: bool subclasses int in Python
+            return 'any(true)' if v else 'any(false)'
+        if isinstance(v, int):
+            return f'any(int64({v}))'
+        if isinstance(v, float):
             return f'any(float64({v}))'
         if isinstance(v, str):
             return self._string_literal(v)
@@ -454,13 +570,14 @@ GO_RESERVED = {
 
 BUILTINS_GO = {
     'uppercase', 'lowercase', 'length', 'reverse', 'type_of', 'number',
+    'int', 'float', 'is_int', 'is_float',
     'text', 'round', 'floor', 'abs', 'sum', 'max', 'min', 'first', 'last',
     'rest', 'push', 'join', 'split', 'contains',
 }
 
 STDLIB_MODULES = {'string', 'list', 'map', 'json', 'ai', 'db', 'security', 'crypto',
                   'auth', 'session', 'cache', 'time', 'math', 'file', 'mail',
-                  'validate', 'queue'}
+                  'validate', 'queue', 'http'}
 
 
 def _is_builtin(name):
@@ -508,7 +625,10 @@ import (
 	"hash"
 	"io"
 	"math"
+	"mime"
+	"mime/multipart"
 	"net/http"
+	"net/smtp"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -556,8 +676,12 @@ func feel_str(v any) string {
 			return "true"
 		}
 		return "false"
+	case int64:
+		return fmt.Sprintf("%d", x)
+	case int:
+		return fmt.Sprintf("%d", x)
 	case float64:
-		if x == float64(int64(x)) {
+		if x == float64(int64(x)) && x > -1e15 && x < 1e15 {
 			return fmt.Sprintf("%d", int64(x))
 		}
 		return fmt.Sprintf("%g", x)
@@ -607,6 +731,10 @@ func feel_truthy(v any) bool {
 		return false
 	case bool:
 		return x
+	case int64:
+		return x != 0
+	case int:
+		return x != 0
 	case float64:
 		return x != 0
 	case string:
@@ -617,6 +745,36 @@ func feel_truthy(v any) bool {
 		return len(x) > 0
 	}
 	return true
+}
+
+// internal helper — returns Go bool. Feel-visible builtin is feel_is_int_b below.
+func feel_isInt(v any) bool {
+	switch v.(type) {
+	case int64, int:
+		return true
+	}
+	return false
+}
+
+func feel_int64(v any) int64 {
+	switch x := v.(type) {
+	case int64:
+		return x
+	case int:
+		return int64(x)
+	case float64:
+		return int64(x)
+	case bool:
+		if x {
+			return 1
+		}
+		return 0
+	case string:
+		var i int64
+		_, _ = fmt.Sscanf(x, "%d", &i)
+		return i
+	}
+	return 0
 }
 
 func feel_add(a, b any) any {
@@ -634,16 +792,32 @@ func feel_add(a, b any) any {
 			return any(out)
 		}
 	}
+	if feel_isInt(a) && feel_isInt(b) {
+		return any(feel_int64(a) + feel_int64(b))
+	}
 	return any(feel_num(a) + feel_num(b))
 }
 
-func feel_sub(a, b any) any { return any(feel_num(a) - feel_num(b)) }
-func feel_mul(a, b any) any { return any(feel_num(a) * feel_num(b)) }
+func feel_sub(a, b any) any {
+	if feel_isInt(a) && feel_isInt(b) {
+		return any(feel_int64(a) - feel_int64(b))
+	}
+	return any(feel_num(a) - feel_num(b))
+}
+
+func feel_mul(a, b any) any {
+	if feel_isInt(a) && feel_isInt(b) {
+		return any(feel_int64(a) * feel_int64(b))
+	}
+	return any(feel_num(a) * feel_num(b))
+}
+
 func feel_div(a, b any) any {
 	bv := feel_num(b)
 	if bv == 0 {
 		panic("division by zero")
 	}
+	// Division always returns float to avoid integer truncation surprises.
 	return any(feel_num(a) / bv)
 }
 
@@ -651,7 +825,25 @@ func feel_eq(a, b any) any {
 	if a == nil || b == nil {
 		return any(a == b)
 	}
-	return any(feel_str(a) == feel_str(b) && fmt.Sprintf("%T", a) == fmt.Sprintf("%T", b)) // best effort
+	// Numeric cross-type equality: int64(5) == float64(5.0) == true.
+	an, aok := a.(int64)
+	bn, bok := b.(int64)
+	if aok && bok {
+		return any(an == bn)
+	}
+	af, afok := a.(float64)
+	bf, bfok := b.(float64)
+	if afok && bfok {
+		return any(af == bf)
+	}
+	if aok && bfok {
+		return any(float64(an) == bf)
+	}
+	if afok && bok {
+		return any(af == float64(bn))
+	}
+	// Fall through: compare via stringified form (handles strings, bools, equal struct shapes).
+	return any(feel_str(a) == feel_str(b) && fmt.Sprintf("%T", a) == fmt.Sprintf("%T", b))
 }
 func feel_ne(a, b any) any { return any(feel_eq(a, b) == any(false)) }
 func feel_lt(a, b any) any { return any(feel_num(a) < feel_num(b)) }
@@ -814,6 +1006,17 @@ func feel_type_of(v any) any {
 	return any("unknown")
 }
 func feel_number(v any) any { return any(feel_num(v)) }
+func feel_int(v any) any    { return any(feel_int64(v)) }
+func feel_float(v any) any  { return any(feel_num(v)) }
+func feel_is_int(v any) any {
+	_, ok1 := v.(int64)
+	_, ok2 := v.(int)
+	return any(ok1 || ok2)
+}
+func feel_is_float(v any) any {
+	_, ok := v.(float64)
+	return any(ok)
+}
 func feel_text(v any) any   { return any(feel_str(v)) }
 func feel_round(v any) any  { return any(float64(int64(feel_num(v) + 0.5))) }
 func feel_floor(v any) any  { return any(float64(int64(feel_num(v)))) }
@@ -1164,7 +1367,15 @@ func feel_from_jsonable(v any) any {
 		out := make([]any, len(x))
 		for i, vv := range x { out[i] = feel_from_jsonable(vv) }
 		return any(out)
-	case float64, string, bool, nil:
+	case float64:
+		// JSON has no int/float distinction; if the value is a whole number
+		// safely representable as int64, return int64 so big IDs and counts
+		// preserve precision through arithmetic.
+		if x == float64(int64(x)) && x > -1e15 && x < 1e15 {
+			return any(int64(x))
+		}
+		return v
+	case string, bool, nil:
 		return v
 	}
 	return v
@@ -1273,6 +1484,43 @@ func feel_encode_response(r feel_response) (int, string, []byte) {
 	return r.status, ct, data
 }
 
+func feel_multipart_file(fh *multipart.FileHeader) map[string]any {
+	// Eagerly read content into memory so handler doesn't need to manage streams.
+	// 32MB-cap is enforced upstream by ParseMultipartForm.
+	src, err := fh.Open()
+	if err != nil {
+		panic(feel_throw{value: any("multipart: open failed: " + err.Error())})
+	}
+	defer src.Close()
+	content, err := io.ReadAll(src)
+	if err != nil {
+		panic(feel_throw{value: any("multipart: read failed: " + err.Error())})
+	}
+	ct := fh.Header.Get("Content-Type")
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	saveTo := func(path any) any {
+		p := feel_str(path)
+		if dir := filepath.Dir(p); dir != "" && dir != "." {
+			os.MkdirAll(dir, 0755)
+		}
+		if err := os.WriteFile(p, content, 0644); err != nil {
+			panic(feel_throw{value: any("save_to: " + err.Error())})
+		}
+		abs, _ := filepath.Abs(p)
+		return any(abs)
+	}
+	return map[string]any{
+		"field_name":   any(""),
+		"name":         any(fh.Filename),
+		"size":         any(int64(len(content))),
+		"content_type": any(ct),
+		"content":      any(string(content)),
+		"save_to":      any(saveTo),
+	}
+}
+
 func feel_dispatch(w http.ResponseWriter, r *http.Request) {
 	t0 := time.Now()
 	method := r.Method
@@ -1312,6 +1560,14 @@ func feel_dispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// WebSocket upgrade — handshake then call the WS handler.
+	if method == "GET" && feel_is_ws_upgrade(r) {
+		if wsRoute, wsCaps, _ := feel_resolve_route("WS", path); wsRoute != nil {
+			feel_handle_ws_route(w, r, path, wsRoute, wsCaps, t0)
+			return
+		}
+	}
+
 	route, captures, methodsForPath := feel_resolve_route(method, path)
 
 	var resp feel_response
@@ -1322,7 +1578,16 @@ func feel_dispatch(w http.ResponseWriter, r *http.Request) {
 			headers: map[string]string{"Allow": strings.Join(methodsForPath, ", ")},
 		}
 	} else if route == nil {
-		resp = feel_response{status: 404, body: map[string]any{"error": any("not found"), "path": any(path)}}
+		// No route matched. For GET/HEAD, try static mounts before 404.
+		if method == "GET" || method == "HEAD" {
+			if sresp, ok := feel_serve_static(path); ok {
+				resp = sresp
+			} else {
+				resp = feel_response{status: 404, body: map[string]any{"error": any("not found"), "path": any(path)}}
+			}
+		} else {
+			resp = feel_response{status: 404, body: map[string]any{"error": any("not found"), "path": any(path)}}
+		}
 	} else {
 		// Build scope
 		query := map[string]any{}
@@ -1341,28 +1606,74 @@ func feel_dispatch(w http.ResponseWriter, r *http.Request) {
 				headers[strings.ToLower(k)] = any(vs[0])
 			}
 		}
-		bodyRaw, _ := io.ReadAll(r.Body)
+		files := map[string]any{}
+		form := map[string]any{}
 		var bodyDecoded any
-		if len(bodyRaw) > 0 {
-			ct := strings.ToLower(r.Header.Get("Content-Type"))
-			text := string(bodyRaw)
-			if strings.Contains(ct, "application/json") || strings.HasPrefix(strings.TrimSpace(text), "{") || strings.HasPrefix(strings.TrimSpace(text), "[") {
-				var decoded any
-				if err := json.Unmarshal(bodyRaw, &decoded); err == nil {
-					bodyDecoded = feel_from_jsonable(decoded)
+		ct := strings.ToLower(r.Header.Get("Content-Type"))
+
+		if strings.Contains(ct, "multipart/form-data") {
+			// 32 MiB in-memory cap; bigger files spill to disk per net/http default.
+			if err := r.ParseMultipartForm(32 << 20); err == nil && r.MultipartForm != nil {
+				for k, vs := range r.MultipartForm.Value {
+					if len(vs) > 0 {
+						form[k] = any(vs[0])
+					}
+				}
+				for k, fhs := range r.MultipartForm.File {
+					if len(fhs) == 0 {
+						continue
+					}
+					fh := fhs[0]
+					files[k] = any(feel_multipart_file(fh))
+				}
+				bodyDecoded = any(form)
+			}
+		} else if strings.Contains(ct, "application/x-www-form-urlencoded") {
+			bodyRaw, _ := io.ReadAll(r.Body)
+			values, err := url.ParseQuery(string(bodyRaw))
+			if err == nil {
+				m := map[string]any{}
+				for k, vs := range values {
+					if len(vs) == 1 {
+						m[k] = any(vs[0])
+					} else if len(vs) > 1 {
+						list := make([]any, len(vs))
+						for i, v := range vs {
+							list[i] = any(v)
+						}
+						m[k] = any(list)
+					}
+				}
+				bodyDecoded = any(m)
+				form = m  // also expose via request.form for symmetry
+			} else {
+				bodyDecoded = any(string(bodyRaw))
+			}
+		} else {
+			bodyRaw, _ := io.ReadAll(r.Body)
+			if len(bodyRaw) > 0 {
+				text := string(bodyRaw)
+				if strings.Contains(ct, "application/json") || strings.HasPrefix(strings.TrimSpace(text), "{") || strings.HasPrefix(strings.TrimSpace(text), "[") {
+					var decoded any
+					if err := json.Unmarshal(bodyRaw, &decoded); err == nil {
+						bodyDecoded = feel_from_jsonable(decoded)
+					} else {
+						bodyDecoded = any(text)
+					}
 				} else {
 					bodyDecoded = any(text)
 				}
-			} else {
-				bodyDecoded = any(text)
 			}
 		}
+
 		request := map[string]any{
 			"method":  any(method),
 			"path":    any(path),
 			"query":   any(query),
 			"headers": any(headers),
 			"body":    bodyDecoded,
+			"files":   any(files),
+			"form":    any(form),
 		}
 		scope := map[string]any{
 			"request": any(request),
@@ -1434,13 +1745,20 @@ func feel_strings_to_anys(xs []string) []any {
 	return out
 }
 
-func feel_serve_http(port int, cors bool) {
+func feel_serve_http(port int, cors bool, certFile string, keyFile string) {
 	feel_cors_enabled = cors
 	addr := fmt.Sprintf(":%d", port)
 	srv := &http.Server{Addr: addr, Handler: http.HandlerFunc(feel_dispatch)}
 	corsNote := ""
 	if cors {
 		corsNote = " (CORS enabled)"
+	}
+	if certFile != "" && keyFile != "" {
+		fmt.Fprintf(os.Stderr, "[feel] serving on https://localhost%s%s\n", addr, corsNote)
+		if err := srv.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
+			panic(feel_throw{value: any(err.Error())})
+		}
+		return
 	}
 	fmt.Fprintf(os.Stderr, "[feel] serving on http://localhost%s%s\n", addr, corsNote)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -2359,10 +2677,28 @@ func feel_mail_send(message any) any {
 		return any(true)
 	}
 	if p == "smtp" {
-		// net/smtp not pulled in by default to keep binary small. To enable SMTP
-		// in a compiled build, edit this and add the smtp call. The interpreter
-		// supports SMTP via stdlib smtplib.
-		panic(feel_throw{value: any("mail.send: SMTP not supported in compiled build (use interpreter mode for SMTP, or extend feel_mail_send to call net/smtp)")})
+		host := os.Getenv("FEEL_SMTP_HOST")
+		if host == "" {
+			panic(feel_throw{value: any("mail.send: FEEL_SMTP_HOST not set")})
+		}
+		port := os.Getenv("FEEL_SMTP_PORT")
+		if port == "" { port = "587" }
+		user := os.Getenv("FEEL_SMTP_USER")
+		pw := os.Getenv("FEEL_SMTP_PASS")
+		addr := host + ":" + port
+		msg := []byte("From: " + from + "\r\n" +
+			"To: " + to + "\r\n" +
+			"Subject: " + subject + "\r\n" +
+			"Content-Type: text/plain; charset=utf-8\r\n" +
+			"\r\n" + body)
+		var auth smtp.Auth
+		if user != "" {
+			auth = smtp.PlainAuth("", user, pw, host)
+		}
+		if err := smtp.SendMail(addr, auth, from, []string{to}, msg); err != nil {
+			panic(feel_throw{value: any("mail.send SMTP error: " + err.Error())})
+		}
+		return any(true)
 	}
 	panic(feel_throw{value: any("mail.send: unknown provider " + p)})
 }
@@ -2769,25 +3105,162 @@ func feel_agent_chat(agent map[string]any, message any) any {
 	panic(feel_throw{value: any("agent chat: exceeded 8 tool-use iterations")})
 }
 
+// ---------- Static file serving ----------
+
+type feel_static_mount struct {
+	urlPrefix string
+	fsDir     string
+}
+
+var feel_static_mounts []feel_static_mount
+
+func feel_mount_static(urlPrefix, fsDir string) {
+	if !strings.HasPrefix(urlPrefix, "/") {
+		urlPrefix = "/" + urlPrefix
+	}
+	if urlPrefix != "/" {
+		urlPrefix = strings.TrimRight(urlPrefix, "/")
+	}
+	feel_static_mounts = append(feel_static_mounts, feel_static_mount{urlPrefix: urlPrefix, fsDir: fsDir})
+	// Longer prefixes win — sort desc by prefix length.
+	sort.Slice(feel_static_mounts, func(i, j int) bool {
+		return len(feel_static_mounts[i].urlPrefix) > len(feel_static_mounts[j].urlPrefix)
+	})
+}
+
+func feel_static_match(path string) (mount feel_static_mount, sub string, ok bool) {
+	for _, m := range feel_static_mounts {
+		if m.urlPrefix == "/" || path == m.urlPrefix || strings.HasPrefix(path, m.urlPrefix+"/") {
+			sub = strings.TrimPrefix(path, m.urlPrefix)
+			sub = strings.TrimPrefix(sub, "/")
+			return m, sub, true
+		}
+	}
+	return feel_static_mount{}, "", false
+}
+
+func feel_serve_static(path string) (feel_response, bool) {
+	mount, sub, ok := feel_static_match(path)
+	if !ok {
+		return feel_response{}, false
+	}
+	fsDirAbs, err := filepath.Abs(mount.fsDir)
+	if err != nil {
+		return feel_response{status: 500, body: map[string]any{"error": any("static: abs failed")}}, true
+	}
+	target := filepath.Join(fsDirAbs, sub)
+	targetAbs, err := filepath.Abs(target)
+	if err != nil || !(targetAbs == fsDirAbs || strings.HasPrefix(targetAbs, fsDirAbs+string(os.PathSeparator))) {
+		return feel_response{status: 403, body: map[string]any{"error": any("forbidden")}}, true
+	}
+	info, err := os.Stat(targetAbs)
+	if err != nil {
+		return feel_response{}, false  // fall through to 404
+	}
+	if info.IsDir() {
+		idx := filepath.Join(targetAbs, "index.html")
+		if i2, err := os.Stat(idx); err == nil && !i2.IsDir() {
+			targetAbs = idx
+		} else {
+			return feel_response{}, false
+		}
+	}
+	data, err := os.ReadFile(targetAbs)
+	if err != nil {
+		return feel_response{status: 500, body: map[string]any{"error": any("static read: " + err.Error())}}, true
+	}
+	ct := mime.TypeByExtension(filepath.Ext(targetAbs))
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	return feel_response{status: 200, body: any(data), contentType: ct}, true
+}
+
 // Silence unused-import warnings if a feature isn't exercised in user code.
 var _ = url.Parse
 var _ = bytes.NewReader
+var _ = feel_mount_static
+
+// ---------- WebSocket hooks (replaced by RUNTIME_GO_WS_BODY when used) ----------
+var feel_ws_is_upgrade_fn = func(r *http.Request) bool { return false }
+var feel_ws_handle_fn = func(w http.ResponseWriter, r *http.Request, path string, route *feel_route, captures map[string]string, t0 time.Time) {
+}
+
+func feel_is_ws_upgrade(r *http.Request) bool { return feel_ws_is_upgrade_fn(r) }
+func feel_handle_ws_route(w http.ResponseWriter, r *http.Request, path string, route *feel_route, captures map[string]string, t0 time.Time) {
+	feel_ws_handle_fn(w, r, path, route, captures, t0)
+}
 '''
 
 
-RUNTIME_GO_DB_IMPORTS = '"database/sql"\n\t_ "modernc.org/sqlite"\n'
+RUNTIME_GO_DB_IMPORTS = (
+    '"database/sql"\n'
+    '\t_ "modernc.org/sqlite"\n'
+    '\t_ "github.com/go-sql-driver/mysql"\n'
+    '\t_ "github.com/lib/pq"\n'
+)
 
 RUNTIME_GO_DB_BODY = r'''
-// ---------- db runtime (M4-D) ----------
+// ---------- db runtime (M4-D + MySQL/Postgres) ----------
 // Pure-Go SQLite via modernc.org/sqlite (no CGO).
+// MySQL via go-sql-driver/mysql, Postgres via lib/pq.
 
-var feel_db_last_ids sync.Map   // *sql.DB -> int64
+var feel_db_last_ids sync.Map     // *sql.DB -> int64
+var feel_db_drivers sync.Map      // *sql.DB -> driverName ("sqlite"|"mysql"|"postgres")
 
 func feel_db_unwrap(conn any) *sql.DB {
 	if db, ok := conn.(*sql.DB); ok {
 		return db
 	}
 	panic(feel_throw{value: any("db: not a connection")})
+}
+
+func feel_db_driver_of(db *sql.DB) string {
+	if v, ok := feel_db_drivers.Load(db); ok {
+		return v.(string)
+	}
+	return "sqlite"
+}
+
+// Translate ? placeholders to $1, $2, ... for Postgres. Skip inside quoted strings.
+func feel_translate_params(driver, sqlText string) string {
+	if driver != "postgres" {
+		return sqlText
+	}
+	out := make([]byte, 0, len(sqlText))
+	inSingle, inDouble := false, false
+	idx := 1
+	for i := 0; i < len(sqlText); i++ {
+		c := sqlText[i]
+		if c == '\'' && !inDouble {
+			inSingle = !inSingle
+		} else if c == '"' && !inSingle {
+			inDouble = !inDouble
+		}
+		if c == '?' && !inSingle && !inDouble {
+			out = append(out, []byte(fmt.Sprintf("$%d", idx))...)
+			idx++
+		} else {
+			out = append(out, c)
+		}
+	}
+	return string(out)
+}
+
+func feel_mysql_url_to_dsn(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		panic(feel_throw{value: any("invalid mysql URL: " + err.Error())})
+	}
+	user := u.User.Username()
+	pass, _ := u.User.Password()
+	host := u.Host
+	if host == "" { host = "localhost:3306" }
+	dbname := strings.TrimPrefix(u.Path, "/")
+	q := u.RawQuery
+	extra := ""
+	if q != "" { extra = "&" + q }
+	return fmt.Sprintf("%s:%s@tcp(%s)/%s?parseTime=true&loc=Local%s", user, pass, host, dbname, extra)
 }
 
 func feel_db_params(raw any) []any {
@@ -2827,19 +3300,37 @@ func feel_db_normalize(v any) any {
 
 func feel_db_connect(args ...any) any {
 	path := feel_str(args[0])
-	db, err := sql.Open("sqlite", path)
+	var driverName, dsn string
+
+	switch {
+	case strings.HasPrefix(path, "mysql://"):
+		driverName = "mysql"
+		dsn = feel_mysql_url_to_dsn(path)
+	case strings.HasPrefix(path, "postgres://"), strings.HasPrefix(path, "postgresql://"):
+		driverName = "postgres"
+		dsn = path
+	case strings.HasPrefix(path, "sqlite:///"):
+		driverName = "sqlite"
+		dsn = path[len("sqlite:///"):]
+	default:
+		driverName = "sqlite"
+		dsn = path
+	}
+
+	db, err := sql.Open(driverName, dsn)
 	if err != nil {
 		panic(feel_throw{value: any("db.connect: " + err.Error())})
 	}
 	if err := db.Ping(); err != nil {
 		panic(feel_throw{value: any("db.connect ping: " + err.Error())})
 	}
+	feel_db_drivers.Store(db, driverName)
 	return any(db)
 }
 
 func feel_db_exec(args ...any) any {
 	db := feel_db_unwrap(args[0])
-	sqlText := feel_str(args[1])
+	sqlText := feel_translate_params(feel_db_driver_of(db), feel_str(args[1]))
 	var params []any
 	if len(args) >= 3 {
 		params = feel_db_params(args[2])
@@ -2857,7 +3348,7 @@ func feel_db_exec(args ...any) any {
 
 func feel_db_query(args ...any) any {
 	db := feel_db_unwrap(args[0])
-	sqlText := feel_str(args[1])
+	sqlText := feel_translate_params(feel_db_driver_of(db), feel_str(args[1]))
 	var params []any
 	if len(args) >= 3 {
 		params = feel_db_params(args[2])
@@ -3360,6 +3851,246 @@ var feel_queue_mod = map[string]any{
 	"process_once": any(feel_queue_process_once),
 	"work":         any(feel_queue_work),
 }
+'''  # end RUNTIME_GO_DB_BODY
+
+
+# Always-included HTTP client (outbound). Appended to the main runtime.
+RUNTIME_GO_HTTP_CLIENT = r'''
+// ---------- HTTP client (outbound) ----------
+
+var feel_http_client = &http.Client{Timeout: 30 * time.Second}
+
+func feel_http_encode_body(body any, headers map[string]string) ([]byte, map[string]string) {
+	if body == nil {
+		return nil, headers
+	}
+	switch v := body.(type) {
+	case string:
+		return []byte(v), headers
+	case []byte:
+		return v, headers
+	case map[string]any, []any:
+		data, _ := json.Marshal(v)
+		hasCT := false
+		for k := range headers {
+			if strings.EqualFold(k, "Content-Type") {
+				hasCT = true
+				break
+			}
+		}
+		if !hasCT {
+			headers["Content-Type"] = "application/json"
+		}
+		return data, headers
+	default:
+		panic(feel_throw{value: any("http: body must be string, map, or list")})
+	}
+}
+
+func feel_http_normalize_headers(h any) map[string]string {
+	out := map[string]string{}
+	if h == nil {
+		return out
+	}
+	m, ok := h.(map[string]any)
+	if !ok {
+		panic(feel_throw{value: any("http: headers must be a map")})
+	}
+	for k, v := range m {
+		out[k] = feel_str(v)
+	}
+	return out
+}
+
+func feel_http_do(method string, url string, body any, headers any, timeout any) any {
+	hdrs := feel_http_normalize_headers(headers)
+	data, hdrs := feel_http_encode_body(body, hdrs)
+
+	var bodyReader io.Reader
+	if data != nil {
+		bodyReader = bytes.NewReader(data)
+	}
+	req, err := http.NewRequest(strings.ToUpper(method), url, bodyReader)
+	if err != nil {
+		panic(feel_throw{value: any("http." + strings.ToLower(method) + ": " + err.Error())})
+	}
+	for k, v := range hdrs {
+		req.Header.Set(k, v)
+	}
+
+	client := feel_http_client
+	if timeout != nil {
+		t := feel_num(timeout)
+		client = &http.Client{Timeout: time.Duration(t * float64(time.Second))}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		panic(feel_throw{value: any("http." + strings.ToLower(method) + ": " + err.Error())})
+	}
+	defer resp.Body.Close()
+
+	raw, _ := io.ReadAll(resp.Body)
+	respHeaders := map[string]any{}
+	for k, vs := range resp.Header {
+		if len(vs) > 0 {
+			respHeaders[strings.ToLower(k)] = any(vs[0])
+		}
+	}
+
+	ct, _ := respHeaders["content-type"].(string)
+	var bodyVal any = string(raw)
+	if strings.Contains(strings.ToLower(ct), "application/json") && len(raw) > 0 {
+		var parsed any
+		if err := json.Unmarshal(raw, &parsed); err == nil {
+			bodyVal = parsed
+		}
+	}
+
+	return any(map[string]any{
+		"status":  any(int64(resp.StatusCode)),
+		"body":    any(bodyVal),
+		"headers": any(respHeaders),
+		"ok":      any(resp.StatusCode >= 200 && resp.StatusCode < 300),
+	})
+}
+
+func feel_http_get(args ...any) any {
+	if len(args) == 0 {
+		panic(feel_throw{value: any("http.get: url required")})
+	}
+	url := feel_str(args[0])
+	var headers any
+	var timeout any
+	if len(args) >= 2 {
+		headers = args[1]
+	}
+	if len(args) >= 3 {
+		timeout = args[2]
+	}
+	return feel_http_do("GET", url, nil, headers, timeout)
+}
+
+func feel_http_post(args ...any) any {
+	if len(args) == 0 {
+		panic(feel_throw{value: any("http.post: url required")})
+	}
+	url := feel_str(args[0])
+	var body, headers, timeout any
+	if len(args) >= 2 {
+		body = args[1]
+	}
+	if len(args) >= 3 {
+		headers = args[2]
+	}
+	if len(args) >= 4 {
+		timeout = args[3]
+	}
+	return feel_http_do("POST", url, body, headers, timeout)
+}
+
+func feel_http_put(args ...any) any {
+	if len(args) == 0 {
+		panic(feel_throw{value: any("http.put: url required")})
+	}
+	url := feel_str(args[0])
+	var body, headers, timeout any
+	if len(args) >= 2 {
+		body = args[1]
+	}
+	if len(args) >= 3 {
+		headers = args[2]
+	}
+	if len(args) >= 4 {
+		timeout = args[3]
+	}
+	return feel_http_do("PUT", url, body, headers, timeout)
+}
+
+func feel_http_delete_(args ...any) any {
+	if len(args) == 0 {
+		panic(feel_throw{value: any("http.delete: url required")})
+	}
+	url := feel_str(args[0])
+	var headers, timeout any
+	if len(args) >= 2 {
+		headers = args[1]
+	}
+	if len(args) >= 3 {
+		timeout = args[2]
+	}
+	return feel_http_do("DELETE", url, nil, headers, timeout)
+}
+
+func feel_http_request(method, url, opts any) any {
+	m := feel_str(method)
+	u := feel_str(url)
+	var body, headers, timeout any
+	if opts != nil {
+		om, ok := opts.(map[string]any)
+		if !ok {
+			panic(feel_throw{value: any("http.request: opts must be a map")})
+		}
+		body = om["body"]
+		headers = om["headers"]
+		timeout = om["timeout"]
+	}
+	return feel_http_do(m, u, body, headers, timeout)
+}
+
+func feel_http_get_json(args ...any) any {
+	if len(args) == 0 {
+		panic(feel_throw{value: any("http.get_json: url required")})
+	}
+	url := feel_str(args[0])
+	hdrs := map[string]any{}
+	if len(args) >= 2 && args[1] != nil {
+		if m, ok := args[1].(map[string]any); ok {
+			for k, v := range m {
+				hdrs[k] = v
+			}
+		}
+	}
+	hasAccept := false
+	for k := range hdrs {
+		if strings.EqualFold(k, "Accept") {
+			hasAccept = true
+			break
+		}
+	}
+	if !hasAccept {
+		hdrs["Accept"] = any("application/json")
+	}
+	var timeout any
+	if len(args) >= 3 {
+		timeout = args[2]
+	}
+	resp := feel_http_do("GET", url, nil, any(hdrs), timeout).(map[string]any)
+	if !resp["ok"].(bool) {
+		panic(feel_throw{value: any(fmt.Sprintf("http.get_json: status %v", resp["status"]))})
+	}
+	body := resp["body"]
+	switch body.(type) {
+	case map[string]any, []any:
+		return body
+	}
+	// Try parse as JSON if server didn't set content-type
+	if s, ok := body.(string); ok {
+		var parsed any
+		if err := json.Unmarshal([]byte(s), &parsed); err == nil {
+			return any(parsed)
+		}
+	}
+	panic(feel_throw{value: any("http.get_json: response is not valid JSON")})
+}
+
+var feel_http_mod = map[string]any{
+	"get":      any(feel_http_get),
+	"post":     any(feel_http_post),
+	"put":      any(feel_http_put),
+	"delete":   any(feel_http_delete_),
+	"request":  any(feel_http_request),
+	"get_json": any(feel_http_get_json),
+}
 '''
 
 
@@ -3372,14 +4103,148 @@ GO_MOD_TEMPLATE_WITH_SQLITE = '''module feel-app
 
 go 1.21
 
-require modernc.org/sqlite v1.34.4
+require (
+	modernc.org/sqlite v1.34.4
+	github.com/go-sql-driver/mysql v1.8.1
+	github.com/lib/pq v1.10.9
+)
+'''
+
+GO_MOD_WS_REQUIRE = 'require github.com/gorilla/websocket v1.5.3\n'
+
+
+# Body appended when uses_ws=True. Overrides the stub funcs from main runtime.
+RUNTIME_GO_WS_BODY = r'''
+
+// ---------- WebSocket (RFC 6455, via gorilla/websocket) ----------
+
+var feel_ws_upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+// Override the stubs above. Go allows package-level re-declaration via name
+// reuse if we wrap them — instead we just shadow at call site via these.
+func feel_is_ws_upgrade_real(r *http.Request) bool {
+	conn := strings.ToLower(r.Header.Get("Connection"))
+	up := strings.ToLower(r.Header.Get("Upgrade"))
+	return strings.Contains(conn, "upgrade") && up == "websocket"
+}
+
+func feel_handle_ws_route_real(w http.ResponseWriter, r *http.Request, path string, route *feel_route, captures map[string]string, t0 time.Time) {
+	conn, err := feel_ws_upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "WS     %-40s -> upgrade failed: %v\n", path, err)
+		return
+	}
+	defer conn.Close()
+
+	wsID := fmt.Sprintf("ws-%d", time.Now().UnixNano())
+	wsMap := map[string]any{
+		"id":   any(wsID),
+		"path": any(path),
+		"send": any(func(msg any) any {
+			var data []byte
+			mt := websocket.TextMessage
+			switch v := msg.(type) {
+			case string:
+				data = []byte(v)
+			case []byte:
+				data = v
+				mt = websocket.BinaryMessage
+			default:
+				data = []byte(feel_str(v))
+			}
+			if err := conn.WriteMessage(mt, data); err != nil {
+				return any(false)
+			}
+			return any(true)
+		}),
+		"receive": any(func() any {
+			mt, data, err := conn.ReadMessage()
+			if err != nil {
+				return any(nil)
+			}
+			if mt == websocket.BinaryMessage {
+				return any(string(data))  // return as string for simplicity
+			}
+			return any(string(data))
+		}),
+		"close": any(func() any {
+			conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+			return any(true)
+		}),
+	}
+
+	// Build scope (same shape as HTTP route, plus ws).
+	query := map[string]any{}
+	for k, vs := range r.URL.Query() {
+		if len(vs) == 1 {
+			query[k] = any(vs[0])
+		} else {
+			items := make([]any, len(vs))
+			for i, v := range vs { items[i] = any(v) }
+			query[k] = any(items)
+		}
+	}
+	headers := map[string]any{}
+	for k, vs := range r.Header {
+		if len(vs) > 0 { headers[strings.ToLower(k)] = any(vs[0]) }
+	}
+	request := map[string]any{
+		"method":  any("WS"),
+		"path":    any(path),
+		"query":   any(query),
+		"headers": any(headers),
+		"body":    any(nil),
+		"files":   any(map[string]any{}),
+		"form":    any(map[string]any{}),
+	}
+	scope := map[string]any{
+		"request": any(request),
+		"body":    any(nil),
+		"query":   any(query),
+		"ws":      any(wsMap),
+	}
+	for k, v := range captures {
+		scope[k] = any(v)
+	}
+
+	func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				fmt.Fprintf(os.Stderr, "WS     %-40s -> handler panic: %v\n", path, rec)
+			}
+		}()
+		_ = route.handler(scope)
+	}()
+
+	fmt.Fprintf(os.Stderr, "WS     %-40s -> 101  (handler returned, conn closed)\n", path)
+}
+
+// Replace the no-op stubs with the real implementations via init.
+func init() {
+	feel_ws_is_upgrade_fn = feel_is_ws_upgrade_real
+	feel_ws_handle_fn = feel_handle_ws_route_real
+}
+
 '''
 
 
-def compile_to_go(source, filename='<input>'):
-    """Return (Go source, uses_db) for the given Feel source."""
+def compile_to_go(source, filename='<input>', search_paths=None):
+    """Return (Go source, uses_db) for the given Feel source.
+
+    search_paths: directories to look for imported modules. Defaults to the
+    directory of `filename` (when filename is a path) plus the cwd.
+    """
+    import os
+    if search_paths is None:
+        search_paths = []
+        if filename and filename != '<input>' and os.path.exists(filename):
+            search_paths.append(os.path.dirname(os.path.abspath(filename)))
+        search_paths.append(os.getcwd())
+
     tree = parse(source, filename=filename)
-    emitter = GoEmitter()
+    emitter = GoEmitter(search_paths=search_paths)
     emitter.depth = 1  # inside main()
     body = emitter.emit_program(tree)
 
@@ -3400,8 +4265,20 @@ def compile_to_go(source, filename='<input>'):
         else:
             runtime = runtime + RUNTIME_GO_DB_BODY
 
+    # Always-included HTTP client runtime (no extra Go imports needed).
+    runtime = runtime + RUNTIME_GO_HTTP_CLIENT
+
+    if emitter.uses_ws:
+        # Inject gorilla/websocket import.
+        runtime = runtime.replace(
+            '"net/http"',
+            '"net/http"\n\t"github.com/gorilla/websocket"',
+            1,
+        )
+        runtime = runtime + RUNTIME_GO_WS_BODY
+
     go_src = runtime + '\nfunc main() {\n' + body + '\n}\n'
-    return go_src, emitter.uses_db
+    return go_src, emitter.uses_db, emitter.uses_ws
 
 
 def build_feel(feel_path, out_path=None, keep_go=False):
@@ -3420,7 +4297,7 @@ def build_feel(feel_path, out_path=None, keep_go=False):
 
     with open(feel_path, encoding='utf-8') as f:
         src = f.read()
-    go_src, uses_db = compile_to_go(src, filename=feel_path)
+    go_src, uses_db, uses_ws = compile_to_go(src, filename=feel_path)
 
     # Output paths
     base = os.path.splitext(os.path.basename(feel_path))[0]
@@ -3435,11 +4312,14 @@ def build_feel(feel_path, out_path=None, keep_go=False):
     # Write a go.mod (module-aware build is required for external deps)
     gomod_path = os.path.join(tmpdir, 'go.mod')
     with open(gomod_path, 'w', encoding='utf-8') as f:
-        f.write(GO_MOD_TEMPLATE_WITH_SQLITE if uses_db else GO_MOD_TEMPLATE)
+        content = GO_MOD_TEMPLATE_WITH_SQLITE if uses_db else GO_MOD_TEMPLATE
+        if uses_ws:
+            content = content + GO_MOD_WS_REQUIRE
+        f.write(content)
 
     abs_out = os.path.abspath(out_path)
     try:
-        if uses_db:
+        if uses_db or uses_ws:
             tidy = subprocess.run(
                 ['go', 'mod', 'tidy'],
                 cwd=tmpdir,

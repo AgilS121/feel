@@ -1,0 +1,13 @@
+-- HTTPS/TLS demo. Provide a self-signed cert via:
+--   openssl req -x509 -newkey rsa:2048 -nodes -keyout key.pem -out cert.pem \
+--     -days 365 -subj "/CN=localhost"
+-- Then:
+--   feel run tls_demo.feel
+-- Or compile to a native binary:
+--   feel build tls_demo.feel -o tls_demo
+--   ./tls_demo
+
+route GET "/health" -> respond "ok"
+route GET "/" -> respond "Feel HTTPS server is running"
+
+serve on 8443 cors tls "cert.pem" "key.pem"

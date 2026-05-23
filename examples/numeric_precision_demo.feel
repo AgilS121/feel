@@ -1,0 +1,39 @@
+-- v0.16-C: int64 vs float64 demo. Same in interpreter + compiled binary.
+
+show -> is_int(5)               -- true
+show -> is_int(5.5)             -- false
+show -> is_float(5.5)           -- true
+show -> is_float(5)             -- false
+
+-- Big int preserved past 2^53
+show -> 9007199254740999        -- 9007199254740999  (precision kept)
+
+-- Arithmetic preserves int when both args are int
+show -> is_int(2 + 3)           -- true
+show -> 2 + 3                   -- 5
+show -> is_int(6 * 7)           -- true
+show -> 6 * 7                   -- 42
+
+-- Mixed int+float promotes
+show -> is_float(5 + 2.5)       -- true
+
+-- Division always returns float
+show -> is_float(7 / 2)         -- true
+show -> 7 / 2                   -- 3.5
+
+-- Cross-type equality
+show -> 5 == 5.0                -- true
+
+-- Explicit conversion
+show -> int(3.7)                -- 3
+show -> is_int(int(3.7))        -- true
+show -> float(5)                -- 5
+show -> is_float(float(5))      -- true
+
+-- JSON int preserved
+let j = json.decode("\{\"id\": 5000000000000, \"price\": 1.5\}")
+show -> j.id                    -- 5000000000000
+show -> is_int(j.id)            -- true
+show -> is_float(j.price)       -- true
+
+show -> "numeric_precision_demo OK"

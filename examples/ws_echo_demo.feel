@@ -1,0 +1,25 @@
+-- WebSocket echo server.
+-- Handles up to 1000 messages per client (effectively unbounded for demo).
+-- Test from browser console:
+--   const ws = new WebSocket("ws://localhost:7300/echo")
+--   ws.onmessage = e => console.log("got:", e.data)
+--   ws.onopen = () => ws.send("hello!")
+
+route WS "/echo" -> do {
+  show -> "client connected: {ws.id}"
+  ws.send("welcome — you are {ws.id}")
+  for i in list.range(1, 1001) -> do {
+    let msg = ws.receive()
+    when msg == nothing ->
+      show -> "client disconnected"
+    otherwise -> do {
+      show -> "got: {msg}"
+      ws.send("echo: {msg}")
+    }
+  }
+  ws.close()
+}
+
+route GET "/" -> respond "WS echo server. Connect to ws://localhost:7300/echo"
+
+serve on 7300

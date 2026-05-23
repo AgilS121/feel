@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Feel WebSocket echo demo</title>
+<style>
+  body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+  #log { background:#111; color:#0f0; padding:1rem; height:300px; overflow:auto; font-family:ui-monospace,monospace; font-size:13px; border-radius:6px; }
+  .me  { color:#9cf; }
+  .srv { color:#0f0; }
+  .sys { color:#ff0; }
+  form { margin-top:1rem; display:flex; gap:8px; }
+  input[name=msg] { flex:1; padding:8px; border:1px solid #ccc; border-radius:6px; }
+  button { padding:8px 16px; border:0; background:#06c; color:#fff; border-radius:6px; cursor:pointer; }
+</style>
+</head>
+<body>
+  <h1>Feel WebSocket echo client</h1>
+  <p>Connect to <code>ws://localhost:7300/echo</code>. Run <code>feel run examples/ws_echo_demo.feel</code> first.</p>
+  <div id="log"></div>
+  <form id="f">
+    <input name="msg" placeholder="type a message" autocomplete="off" autofocus>
+    <button>Send</button>
+  </form>
+
+<script>
+const log = document.getElementById('log');
+function add(cls, text){
+  const div = document.createElement('div');
+  div.className = cls;
+  div.textContent = text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+const ws = new WebSocket('ws://localhost:7300/echo');
+ws.onopen    = () => add('sys', '[connected]');
+ws.onmessage = e => add('srv', 'server: ' + e.data);
+ws.onclose   = () => add('sys', '[disconnected]');
+ws.onerror   = e => add('sys', '[error: ' + (e.message || '?') + ']');
+
+document.getElementById('f').onsubmit = e => {
+  e.preventDefault();
+  const m = e.target.msg.value;
+  if (!m) return;
+  ws.send(m);
+  add('me', 'you: ' + m);
+  e.target.msg.value = '';
+};
+</script>
+</body>
+</html>

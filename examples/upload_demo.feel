@@ -1,0 +1,22 @@
+-- File upload demo.
+-- Start the server: feel run upload_demo.feel
+-- Test:
+--   curl -F "photo=@some.jpg" -F "caption=hello world" http://localhost:7000/upload
+
+route POST "/upload" -> do {
+  let file = request.files["photo"]
+  show -> "got upload"
+  let saved_path = file.save_to("uploads/{file.name}")
+  respond map {
+    ok: true,
+    name: file.name,
+    size: file.size,
+    content_type: file.content_type,
+    caption: request.form["caption"],
+    saved_to: saved_path
+  }
+}
+
+route GET "/" -> respond "POST a file to /upload"
+
+serve on 7000

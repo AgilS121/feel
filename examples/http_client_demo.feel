@@ -1,0 +1,26 @@
+-- HTTP client demo — call external API.
+-- Requires internet. Uses httpbin.org which echoes requests back.
+
+-- 1. Simple GET with auto JSON parsing
+let resp = http.get("https://httpbin.org/get")
+show -> resp.status              -- 200
+show -> resp.ok                  -- true
+show -> resp.body.url            -- "https://httpbin.org/get"
+
+-- 2. GET JSON shortcut
+let data = http.get_json("https://httpbin.org/uuid")
+show -> data.uuid                -- some UUID
+
+-- 3. POST with JSON body (auto-encoded)
+let posted = http.post("https://httpbin.org/post", map { name: "feel", version: "0.16" })
+show -> posted.status            -- 200
+show -> posted.body.json.name    -- "feel"
+
+-- 4. Custom headers + timeout via request()
+let r = http.request("GET", "https://httpbin.org/headers", map {
+  headers: map { "X-Custom": "feel-test" },
+  timeout: 10
+})
+show -> r.body.headers["X-Custom"]   -- "feel-test"
+
+show -> "http_client_demo OK"

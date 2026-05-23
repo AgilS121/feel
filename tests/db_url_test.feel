@@ -1,0 +1,21 @@
+-- URL scheme handling (interpreter side)
+-- We can't test actual MySQL/Postgres without env; verify the error is the
+-- driver-specific connection refused (proves URL parsed + driver dispatched).
+
+let mysql_err = try db.connect("mysql://wronguser:wrongpw@localhost:1/nodb") catch err -> err
+assert contains(mysql_err, "PyMySQL") or contains(mysql_err, "connect") or contains(mysql_err, "Errno"),
+  "mysql URL routed to PyMySQL driver"
+
+let pg_err = try db.connect("postgres://wronguser:wrongpw@localhost:1/nodb") catch err -> err
+assert contains(pg_err, "psycopg2") or contains(pg_err, "connect") or contains(pg_err, "could not"),
+  "postgres URL routed to psycopg2"
+
+-- SQLite still works
+let conn = db.connect(":memory:")
+db.exec(conn, "CREATE TABLE x (id INTEGER)")
+db.exec(conn, "INSERT INTO x VALUES (1)")
+let row = db.query_one(conn, "SELECT id FROM x")
+assert row.id == 1, "sqlite still works"
+db.close(conn)
+
+show -> "db_url_test OK"

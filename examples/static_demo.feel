@@ -1,0 +1,13 @@
+-- Static file serving demo.
+-- Test:
+--   curl http://localhost:7200/static/styles.css
+--   curl http://localhost:7200/static/index.html
+--   curl http://localhost:7200/                       (route wins over static at /)
+--   curl http://localhost:7200/static/../etc/passwd   (blocked: 403)
+
+static "/static" -> "examples/public"
+
+route GET "/" -> respond "API root"
+route GET "/api/version" -> respond "1.0"
+
+serve on 7200

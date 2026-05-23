@@ -157,10 +157,19 @@ class RespondExpr(Node):
 
 
 class ServeStmt(Node):
-    """serve on PORT [cors] — start HTTP server, blocking."""
-    def __init__(self, port, cors=False):
+    """serve on PORT [cors] [tls CERT KEY] — start HTTP/HTTPS server, blocking."""
+    def __init__(self, port, cors=False, cert_file=None, key_file=None):
         self.port = port
         self.cors = cors
+        self.cert_file = cert_file
+        self.key_file = key_file
+
+
+class StaticDecl(Node):
+    """static "URL_PREFIX" -> "FS_DIR" — serve filesystem dir under URL prefix."""
+    def __init__(self, url_prefix, fs_dir):
+        self.url_prefix = url_prefix
+        self.fs_dir = fs_dir
 
 
 class ToolDecl(Node):
@@ -258,7 +267,7 @@ class Parser:
         'TRY', 'THROW', 'MINUS', 'NOT', 'RESPOND',
     }
 
-    _HTTP_METHODS = {'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'}
+    _HTTP_METHODS = {'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS', 'WS'}
 
     def check_snake_case(self, name, token, kind):
         """Enforce snake_case for variables, functions, parameters."""
@@ -323,6 +332,7 @@ class Parser:
         if t.type == 'ASSERT': return self.parse_assert()
         if t.type == 'ROUTE': return self.parse_route()
         if t.type == 'SERVE': return self.parse_serve()
+        if t.type == 'STATIC': return self.parse_static()
         if t.type == 'TOOL': return self.parse_tool()
         if t.type == 'AGENT': return self.parse_agent()
         return self.parse_expr_stmt()
@@ -492,10 +502,28 @@ class Parser:
         port_tok = self.expect('NUMBER', hint="'on' must be followed by a port number")
         port = int(port_tok.value)
         cors = False
+        cert_file = None
+        key_file = None
+        # Order: cors? tls?  — both optional, cors first.
         if self.current() and self.current().type == 'CORS':
             self.advance()
             cors = True
-        return _pos(ServeStmt(port, cors=cors), t)
+        if self.current() and self.current().type == 'TLS':
+            self.advance()
+            cert_tok = self.expect('STRING', hint="'tls' must be followed by a cert file path string")
+            cert_file = cert_tok.value
+            key_tok = self.expect('STRING', hint="'tls CERT' must be followed by a key file path string")
+            key_file = key_tok.value
+        return _pos(ServeStmt(port, cors=cors, cert_file=cert_file, key_file=key_file), t)
+
+    def parse_static(self):
+        t = self.advance()  # static
+        prefix_tok = self.expect('STRING', hint="'static' must be followed by a URL prefix string")
+        url_prefix = prefix_tok.value
+        self.expect('ARROW', hint="'static \"prefix\"' must be followed by '->' then the filesystem dir")
+        dir_tok = self.expect('STRING', hint="'->' must be followed by a filesystem directory path string")
+        fs_dir = dir_tok.value
+        return _pos(StaticDecl(url_prefix, fs_dir), t)
 
     def parse_tool(self):
         t = self.advance()  # tool

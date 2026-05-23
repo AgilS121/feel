@@ -80,7 +80,12 @@ class Formatter:
         if isinstance(n, RouteDecl):
             return f'route {n.method} {self._string_lit(n.path)} -> {self.expr(n.handler)}'
         if isinstance(n, ServeStmt):
-            return f'serve on {n.port}'
+            parts = [f'serve on {n.port}']
+            if n.cors:
+                parts.append('cors')
+            if n.cert_file and n.key_file:
+                parts.append(f'tls {self._string_lit(n.cert_file)} {self._string_lit(n.key_file)}')
+            return ' '.join(parts)
         if isinstance(n, ToolDecl):
             params = f' taking {", ".join(n.params)}' if n.params else ''
             return f'tool {n.name} {self._string_lit(n.description)}{params} -> {self.expr(n.body)}'

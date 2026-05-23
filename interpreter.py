@@ -8,7 +8,7 @@ from parser import (Program, LetStmt, DefineStmt, RecordDef, ShowStmt,
                     Call, CallExpr, FieldAccess, IndexAccess, RecordLiteral, MapLiteral,
                     ListLiteral, Ident, Literal, ArrowExpr,
                     TryStmt, ThrowStmt, CatchStep, ImportStmt, AssertStmt,
-                    Block, Lambda, RouteDecl, RespondExpr, ServeStmt,
+                    Block, Lambda, RouteDecl, RespondExpr, ServeStmt, StaticDecl,
                     ToolDecl, AgentDecl)
 from errors import FeelError, FeelThrow
 
@@ -197,6 +197,10 @@ BUILTINS = {
     'reverse':   lambda x: x[::-1] if isinstance(x, (str, list)) else x,
     'type_of':   lambda x: _type_of(x),
     'number':    _to_number,
+    'int':       lambda x: int(x) if not isinstance(x, bool) else (1 if x else 0),
+    'float':     lambda x: float(x) if not isinstance(x, bool) else (1.0 if x else 0.0),
+    'is_int':    lambda x: isinstance(x, int) and not isinstance(x, bool),
+    'is_float':  lambda x: isinstance(x, float),
     'text':      lambda x: feel_str(x),
     'round':     lambda x: round(x),
     'floor':     lambda x: int(x),
@@ -384,7 +388,13 @@ class Interpreter:
 
         if isinstance(node, ServeStmt):
             from runtime.http import serve
-            serve(port=node.port, cors=node.cors)
+            serve(port=node.port, cors=node.cors,
+                  cert_file=node.cert_file, key_file=node.key_file)
+            return None
+
+        if isinstance(node, StaticDecl):
+            from runtime.router import global_registry
+            global_registry().mount_static(node.url_prefix, node.fs_dir)
             return None
 
         if isinstance(node, ToolDecl):
@@ -639,7 +649,13 @@ class Interpreter:
 
         if isinstance(node, ServeStmt):
             from runtime.http import serve
-            serve(port=node.port, cors=node.cors)
+            serve(port=node.port, cors=node.cors,
+                  cert_file=node.cert_file, key_file=node.key_file)
+            return None
+
+        if isinstance(node, StaticDecl):
+            from runtime.router import global_registry
+            global_registry().mount_static(node.url_prefix, node.fs_dir)
             return None
 
         if isinstance(node, ThrowStmt):
@@ -711,6 +727,8 @@ class Interpreter:
                 'headers': feel_request.headers,
                 'body':    feel_request.body,
                 'params':  feel_request.params,
+                'files':   feel_request.files,
+                'form':    feel_request.form,
             }
             local = Environment(closure_env)
             local.set('request', request_map)
@@ -718,6 +736,9 @@ class Interpreter:
             local.set('query', feel_request.query)
             for k, v in feel_request.params.items():
                 local.set(k, v)
+            # WebSocket handler: expose `ws` in scope.
+            if getattr(feel_request, '_ws', None) is not None:
+                local.set('ws', feel_request._ws.to_feel_map())
             sub = Interpreter.__new__(Interpreter)
             sub.env = local
             sub.filename = filename

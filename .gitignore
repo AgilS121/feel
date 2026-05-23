@@ -38,3 +38,12 @@ desktop.ini
 .env
 .env.local
 .env.*.local
+
+# Benchmark transient artifacts
+benchmark/*.log
+benchmark/*.txt
+benchmark/*.db
+benchmark/cert.pem
+benchmark/key.pem
+benchmark/hello_*.exe
+benchmark/orders_*.exe

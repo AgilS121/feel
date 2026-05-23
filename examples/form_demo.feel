@@ -1,0 +1,22 @@
+-- Form-urlencoded demo.
+-- Test:
+--   curl -X POST -d "email=a@b.com&password=secret" http://localhost:7100/login
+
+route POST "/login" -> do {
+  let email = request.body.email
+  let password = request.body.password
+  respond map {
+    ok: true,
+    email: email,
+    password_len: length(password)
+  }
+}
+
+route POST "/multi" -> do {
+  -- multi-value field: ?tag=red&tag=blue&tag=green
+  respond request.body
+}
+
+route GET "/" -> respond "POST x-www-form-urlencoded to /login or /multi"
+
+serve on 7100

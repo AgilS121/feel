@@ -1,0 +1,50 @@
+-- v0.16-C: int64 vs float64 precision tests.
+
+-- 1. Type predicates
+assert is_int(5), "literal 5 is int"
+assert is_int(0), "literal 0 is int"
+assert is_int(-42), "literal -42 is int"
+assert is_float(5.5), "literal 5.5 is float"
+assert is_float(0.0), "literal 0.0 is float"
+assert not is_int(5.5), "5.5 not int"
+assert not is_float(5), "5 not float"
+
+-- 2. Big integer preserved past 2^53 (float64's safe-int limit)
+let big = 9007199254740999      -- 2^53 + 7
+assert is_int(big), "big literal stays int"
+
+-- 3. Arithmetic preserves int when both args are int
+let sum = 2 + 3
+assert is_int(sum), "int + int = int"
+assert sum == 5, "value preserved"
+
+let prod = 6 * 7
+assert is_int(prod), "int * int = int"
+assert prod == 42, "value preserved"
+
+-- 4. Mixed int+float promotes to float
+let mixed = 5 + 2.5
+assert is_float(mixed), "int + float = float"
+
+-- 5. Division always returns float (avoid integer-truncation surprise)
+let q = 7 / 2
+assert is_float(q), "int / int = float"
+assert q == 3.5, "real division"
+
+-- 6. Cross-type equality: int(5) == float(5.0)
+assert 5 == 5.0, "int(5) equals float(5.0)"
+assert 1 + 2 == 3.0, "result equals across types"
+
+-- 7. Explicit conversion
+assert is_int(int(3.7)), "int(float) → int"
+assert int(3.7) == 3, "int truncates"
+assert is_float(float(5)), "float(int) → float"
+assert float(5) == 5.0, "value preserved"
+
+-- 8. JSON roundtrip preserves int (escape braces with \{ \})
+let j = json.decode("\{\"id\": 5000000000000, \"price\": 1.5\}")
+assert is_int(j.id), "JSON whole number → int"
+assert j.id == 5000000000000, "value preserved"
+assert is_float(j.price), "JSON decimal → float"
+
+show -> "numeric_precision_test OK"

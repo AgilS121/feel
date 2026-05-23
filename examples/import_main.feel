@@ -1,0 +1,9 @@
+-- Multi-file program: imports greet_helper.feel
+import greet_helper
+
+show -> greet_helper.hello("Budi")
+show -> greet_helper.language
+
+-- Selective expose
+import greet_helper expose salam
+show -> salam("Siti")
