@@ -4,10 +4,18 @@ import re
 
 
 def compile_pattern(pattern):
-    """Convert a Feel route pattern like '/todos/{id}' to a regex + param names.
+    """Convert a Feel route pattern to a regex + param names.
+
+    Supports both :param and {param} syntax:
+      '/users/:id'        → matches /users/123, params={'id':'123'}
+      '/users/{id}'       → same
+      '/employees/:id/contract' → matches /employees/3/contract
 
     Returns: (compiled_regex, ['id'])
     """
+    # Normalise :param → {param} so the loop only needs to handle one form
+    pattern = re.sub(r':([a-zA-Z_][a-zA-Z0-9_]*)', r'{\1}', pattern)
+
     param_names = []
     regex_parts = ['^']
     i = 0
