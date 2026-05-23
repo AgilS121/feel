@@ -58,6 +58,8 @@ class RouteRegistry:
     def register(self, method, pattern, handler):
         compiled, param_names = compile_pattern(pattern)
         self.routes.append((method.upper(), pattern, compiled, param_names, handler))
+        # Keep routes sorted: fewer params first, then longer patterns first (more specific wins).
+        self.routes.sort(key=lambda r: (len(r[3]), -len(r[1])))
 
     def mount_static(self, url_prefix, fs_dir):
         """Mount fs_dir at url_prefix. Longer prefixes are matched first."""
