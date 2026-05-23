@@ -26,12 +26,37 @@ import sqlite3 as _sqlite
 class _Conn:
     """Unified connection wrapper. Handles paramstyle translation across
     SQLite (?), MySQL/Postgres (%s), so user code uses ? everywhere.
+
+    MySQL/Postgres: thread-local connections — ThreadingHTTPServer runs each
+    request in its own thread, and PyMySQL connections are NOT thread-safe.
+    Each thread transparently gets its own underlying connection.
     """
-    def __init__(self, raw, kind):
+    def __init__(self, raw, kind, connect_kwargs=None):
         self.raw = raw
         self.kind = kind  # 'sqlite' | 'mysql' | 'postgres'
+        self._connect_kwargs = connect_kwargs  # stored for thread-local reconnect
+        self._local = None  # threading.local(), lazily created for mysql/postgres
+
+    def _thread_conn(self):
+        """Return a per-thread raw connection (MySQL/Postgres only)."""
+        import threading
+        if self._local is None:
+            self._local = threading.local()
+        if not getattr(self._local, 'raw', None):
+            kw = self._connect_kwargs
+            if self.kind == 'mysql':
+                import pymysql
+                self._local.raw = pymysql.connect(**kw)
+            elif self.kind == 'postgres':
+                import psycopg2
+                c = psycopg2.connect(**kw)
+                c.autocommit = True
+                self._local.raw = c
+        return self._local.raw
 
     def cursor(self):
+        if self.kind in ('mysql', 'postgres'):
+            return self._thread_conn().cursor()
         return self.raw.cursor()
 
     def close(self):
@@ -81,7 +106,7 @@ def connect(path):
             )
         from urllib.parse import urlparse
         u = urlparse(s)
-        raw = pymysql.connect(
+        kw = dict(
             host=u.hostname or 'localhost',
             port=u.port or 3306,
             user=u.username or '',
@@ -89,7 +114,8 @@ def connect(path):
             database=(u.path or '/').lstrip('/'),
             autocommit=True,
         )
-        return _Conn(raw, 'mysql')
+        raw = pymysql.connect(**kw)
+        return _Conn(raw, 'mysql', connect_kwargs=kw)
 
     if s.startswith('postgres://') or s.startswith('postgresql://'):
         try:
@@ -102,7 +128,7 @@ def connect(path):
             )
         raw = psycopg2.connect(s)
         raw.autocommit = True
-        return _Conn(raw, 'postgres')
+        return _Conn(raw, 'postgres', connect_kwargs={'dsn': s})
 
     # SQLite path (default)
     if s.startswith('sqlite:///'):
