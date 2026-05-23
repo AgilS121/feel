@@ -64,7 +64,12 @@ class _Conn:
 
 
 def _translate_qmark_to_pct(sql):
-    """Replace ? placeholders with %s, skipping anything inside quoted strings."""
+    """Replace ? placeholders with %s; escape ALL literal % to %%.
+
+    PyMySQL uses Python %-formatting on the whole SQL string, so any bare %
+    (even inside SQL string literals) must be escaped to %%.
+    ? outside quoted strings become %s; ? inside strings are left alone.
+    """
     out = []
     i = 0
     in_single = False
@@ -79,6 +84,8 @@ def _translate_qmark_to_pct(sql):
             out.append(c)
         elif c == '?' and not in_single and not in_double:
             out.append('%s')
+        elif c == '%':
+            out.append('%%')
         else:
             out.append(c)
         i += 1
