@@ -18,6 +18,7 @@ from . import cache_mod
 from . import mail_mod
 from . import queue_mod
 from . import http_client_mod
+from . import env_mod
 
 
 def install_into(env):
@@ -44,6 +45,7 @@ def install_into(env):
         ('mail', mail_mod.EXPORTS),
         ('queue', queue_mod.EXPORTS),
         ('http', http_client_mod.EXPORTS),
+        ('env', env_mod.EXPORTS),
     ]:
         mod_env = Environment()
         for n, fn in mod_funcs.items():

@@ -577,7 +577,7 @@ BUILTINS_GO = {
 
 STDLIB_MODULES = {'string', 'list', 'map', 'json', 'ai', 'db', 'security', 'crypto',
                   'auth', 'session', 'cache', 'time', 'math', 'file', 'mail',
-                  'validate', 'queue', 'http'}
+                  'validate', 'queue', 'http', 'env'}
 
 
 def _is_builtin(name):
@@ -4090,6 +4090,139 @@ var feel_http_mod = map[string]any{
 	"delete":   any(feel_http_delete_),
 	"request":  any(feel_http_request),
 	"get_json": any(feel_http_get_json),
+}
+
+// ---------- env module (process env + .env file) ----------
+
+var (
+	feel_env_lock    sync.Mutex
+	feel_env_loaded  bool
+	feel_env_dotenv  = map[string]string{}
+)
+
+func feel_env_parse_dotenv(text string) map[string]string {
+	out := map[string]string{}
+	for _, raw := range strings.Split(text, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		idx := strings.Index(line, "=")
+		if idx < 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:idx])
+		value := strings.TrimSpace(line[idx+1:])
+		// Strip surrounding quotes
+		if len(value) >= 2 {
+			f, l := value[0], value[len(value)-1]
+			if (f == '"' || f == '\'') && f == l {
+				value = value[1 : len(value)-1]
+			}
+		}
+		out[key] = value
+	}
+	return out
+}
+
+func feel_env_autoload() {
+	feel_env_lock.Lock()
+	defer feel_env_lock.Unlock()
+	if feel_env_loaded {
+		return
+	}
+	feel_env_loaded = true
+	cwd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	path := filepath.Join(cwd, ".env")
+	if data, err := os.ReadFile(path); err == nil {
+		for k, v := range feel_env_parse_dotenv(string(data)) {
+			feel_env_dotenv[k] = v
+		}
+	}
+}
+
+func feel_env_get(args ...any) any {
+	if len(args) == 0 {
+		return any(nil)
+	}
+	feel_env_autoload()
+	name := feel_str(args[0])
+	if v, ok := os.LookupEnv(name); ok {
+		return any(v)
+	}
+	feel_env_lock.Lock()
+	v, ok := feel_env_dotenv[name]
+	feel_env_lock.Unlock()
+	if ok {
+		return any(v)
+	}
+	if len(args) >= 2 {
+		return args[1]
+	}
+	return any(nil)
+}
+
+func feel_env_has(name any) any {
+	feel_env_autoload()
+	n := feel_str(name)
+	if _, ok := os.LookupEnv(n); ok {
+		return any(true)
+	}
+	feel_env_lock.Lock()
+	_, ok := feel_env_dotenv[n]
+	feel_env_lock.Unlock()
+	return any(ok)
+}
+
+func feel_env_set(name, value any) any {
+	os.Setenv(feel_str(name), feel_str(value))
+	return any(true)
+}
+
+func feel_env_load(args ...any) any {
+	path := ".env"
+	if len(args) >= 1 && args[0] != nil {
+		path = feel_str(args[0])
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return any(false)
+	}
+	parsed := feel_env_parse_dotenv(string(data))
+	feel_env_lock.Lock()
+	defer feel_env_lock.Unlock()
+	for k, v := range parsed {
+		feel_env_dotenv[k] = v
+	}
+	feel_env_loaded = true
+	return any(true)
+}
+
+func feel_env_all() any {
+	feel_env_autoload()
+	out := map[string]any{}
+	feel_env_lock.Lock()
+	for k, v := range feel_env_dotenv {
+		out[k] = any(v)
+	}
+	feel_env_lock.Unlock()
+	for _, e := range os.Environ() {
+		if idx := strings.Index(e, "="); idx > 0 {
+			out[e[:idx]] = any(e[idx+1:])
+		}
+	}
+	return any(out)
+}
+
+var feel_env_mod = map[string]any{
+	"get":  any(feel_env_get),
+	"has":  any(feel_env_has),
+	"set":  any(feel_env_set),
+	"load": any(feel_env_load),
+	"all":  any(feel_env_all),
 }
 '''
 

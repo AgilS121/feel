@@ -115,26 +115,39 @@ postgres://user:password@host:port/database
 sqlite:///path/to/file.db
 ```
 
+### .env
+
+Bikin file `.env` di root project:
+
+```
+DATABASE_URL=mysql://feeluser:feelpass@localhost:3306/myapi
+JWT_SECRET=ganti-dengan-random-string-panjang
+```
+
+Feel auto-load `.env` dari working directory pertama kali kamu pakai
+`env.get/has/all`. OS env var menang atas `.env` (untuk override di production).
+
 ### config.feel
 
 ```feel
--- config.feel — load DB URL from env, fallback ke local default.
-let db_url = env.get("DATABASE_URL")
-let final_url = when db_url == nothing
-  -> "mysql://feeluser:feelpass@localhost:3306/myapi"
-  otherwise
-  -> db_url
+-- config.feel — load config dari env (auto .env + OS env vars).
+let db_url = env.get("DATABASE_URL", "mysql://feeluser:feelpass@localhost:3306/myapi")
+let jwt_secret = env.get("JWT_SECRET", "dev-secret-change-me")
 
-let conn = db.connect(final_url)
-show -> "[config] connected to {final_url}"
+let conn = db.connect(db_url)
+show -> "[config] connected to {db_url}"
 ```
 
-> `env.get(name)` belum ada di stdlib resmi. Untuk sekarang gunakan default URL
-> langsung, atau set lewat OS env var dan bikin helper kecil:
->
-> ```feel
-> define get_env taking name -> file.read_or(".env_value_" + name, "")
-> ```
+API ringkas:
+
+| Call | Hasil |
+|---|---|
+| `env.get(name)` | string atau `nothing` kalau ga ada |
+| `env.get(name, default)` | string (selalu) |
+| `env.has(name)` | bool |
+| `env.set(name, value)` | set ke process env (tidak persisted) |
+| `env.load(path)` | explicit load `.env` lain (default: `.env` di CWD) |
+| `env.all()` | map semua env vars |
 
 ### Setup MySQL user (sekali jalan)
 
@@ -599,6 +612,17 @@ serve on 443 cors tls "/etc/letsencrypt/live/api.example.com/fullchain.pem"
                      "/etc/letsencrypt/live/api.example.com/privkey.pem"
 ```
 
+### Production env vars
+
+`env.get()` selalu cek **OS env var dulu**, baru `.env` file. Jadi di
+production, jangan deploy `.env` — set lewat systemd `Environment=`,
+Docker `--env`, atau Kubernetes Secrets. `.env` cukup untuk dev local.
+
+```bash
+# Override dev .env tanpa edit file
+DATABASE_URL=mysql://produser:prodpass@db.prod:3306/myapi ./my-api
+```
+
 ---
 
 ## Cheat sheet
@@ -650,6 +674,16 @@ let resp = http.get("https://api.x/users")
 let r = http.post(url, map { name: "x" })           -- auto JSON encode
 let data = http.get_json(url)                       -- shortcut
 http.request("PUT", url, map { body: ..., headers: ..., timeout: 5 })
+```
+
+### Env / config
+```feel
+env.get("KEY")                            -- → string | nothing
+env.get("KEY", "default")                 -- → string (always)
+env.has("KEY")                            -- → bool
+env.set("KEY", "value")                   -- process-local only
+env.load(".env.production")               -- explicit alternate file
+env.all()                                 -- → map of all vars
 ```
 
 ### Response shortcuts
