@@ -467,9 +467,16 @@ class Interpreter:
             return None
 
         if isinstance(node, BinOp):
+            op = node.op
+            # Short-circuit: evaluate right only when needed
+            if op == 'and':
+                l = self.eval_expr(node.left)
+                return self.eval_expr(node.right) if l else l
+            if op == 'or':
+                l = self.eval_expr(node.left)
+                return l if l else self.eval_expr(node.right)
             l = self.eval_expr(node.left)
             r = self.eval_expr(node.right)
-            op = node.op
             try:
                 if op == '+': return l + r
                 if op == '-': return l - r
