@@ -1,0 +1,26 @@
+-- Mail (mock provider) — compile-to-native check.
+
+mail.clear_sent()
+show -> mail.provider()
+
+mail.send(map {
+  to: "user@example.com",
+  subject: "Welcome",
+  body: "Hi Budi, thanks for joining.",
+})
+
+mail.send(map {
+  to: "admin@example.com",
+  subject: "Daily Report",
+  body: "All systems nominal",
+  from: "reports@my-app.com",
+})
+
+let outbox = mail.sent()
+show -> length(outbox)
+show -> outbox[0].to
+show -> outbox[1].from
+
+mail.clear_sent()
+show -> length(mail.sent())
+show -> "mail_demo OK"

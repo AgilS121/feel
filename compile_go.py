@@ -454,7 +454,8 @@ BUILTINS_GO = {
     'rest', 'push', 'join', 'split', 'contains',
 }
 
-STDLIB_MODULES = {'string', 'list', 'map', 'json', 'ai', 'db', 'security', 'crypto'}
+STDLIB_MODULES = {'string', 'list', 'map', 'json', 'ai', 'db', 'security', 'crypto',
+                  'auth', 'session', 'cache', 'time', 'math', 'file', 'mail'}
 
 
 def _is_builtin(name):
@@ -501,9 +502,11 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -1381,6 +1384,20 @@ func feel_dispatch(w http.ResponseWriter, r *http.Request) {
 			}()
 			raw := route.handler(scope)
 			resp = feel_response_from(raw)
+			// Lift session cookies attached by session.set / session.clear
+			if bm, ok := resp.body.(map[string]any); ok {
+				if rawCookies, ok := bm["__cookies__"]; ok {
+					if list, ok := rawCookies.([]any); ok {
+						if resp.headers == nil {
+							resp.headers = map[string]string{}
+						}
+						for i, c := range list {
+							resp.headers[fmt.Sprintf("Set-Cookie__%d", i)] = feel_str(c)
+						}
+						delete(bm, "__cookies__")
+					}
+				}
+			}
 		}()
 	}
 
@@ -1391,7 +1408,13 @@ func feel_dispatch(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(k, v)
 	}
 	for k, v := range resp.headers {
-		w.Header().Set(k, v)
+		actual := k
+		if strings.HasPrefix(k, "Set-Cookie__") {
+			actual = "Set-Cookie"
+			w.Header().Add(actual, v)
+			continue
+		}
+		w.Header().Set(actual, v)
 	}
 	w.WriteHeader(status)
 	w.Write(bodyBytes)
@@ -1932,6 +1955,437 @@ var feel_security_mod = map[string]any{
 	"audit":         any(feel_security_audit),
 	"set_audit_log": any(feel_security_set_audit_log),
 	"reset":         any(feel_security_reset),
+}
+
+// ---------- time / math / file modules ----------
+
+var feel_time_mod = map[string]any{
+	"now":     any(func() any { return any(float64(time.Now().Unix())) }),
+	"now_ms":  any(func() any { return any(float64(time.Now().UnixMilli())) }),
+	"sleep":   any(func(ms any) any { time.Sleep(time.Duration(feel_num(ms)) * time.Millisecond); return any(nil) }),
+	"format": any(func(args ...any) any {
+		var t time.Time
+		if len(args) >= 1 && args[0] != nil {
+			t = time.Unix(int64(feel_num(args[0])), 0)
+		} else {
+			t = time.Now()
+		}
+		layout := "2006-01-02 15:04:05"
+		if len(args) >= 2 {
+			// Convert Python-style strftime-ish to Go layout. Common cases only.
+			py := feel_str(args[1])
+			repl := strings.NewReplacer(
+				"%Y", "2006", "%m", "01", "%d", "02",
+				"%H", "15", "%M", "04", "%S", "05",
+			)
+			layout = repl.Replace(py)
+		}
+		return any(t.Format(layout))
+	}),
+	"iso_now": any(func() any { return any(time.Now().Format(time.RFC3339)) }),
+}
+
+var feel_math_mod = map[string]any{
+	"pi":            any(math.Pi),
+	"e":             any(math.E),
+	"sqrt":          any(func(x any) any { return any(math.Sqrt(feel_num(x))) }),
+	"pow":           any(func(b, e any) any { return any(math.Pow(feel_num(b), feel_num(e))) }),
+	"log":           any(func(args ...any) any {
+		if len(args) >= 2 {
+			return any(math.Log(feel_num(args[0])) / math.Log(feel_num(args[1])))
+		}
+		return any(math.Log(feel_num(args[0])))
+	}),
+	"sin":           any(func(x any) any { return any(math.Sin(feel_num(x))) }),
+	"cos":           any(func(x any) any { return any(math.Cos(feel_num(x))) }),
+	"tan":           any(func(x any) any { return any(math.Tan(feel_num(x))) }),
+	"ceil":          any(func(x any) any { return any(math.Ceil(feel_num(x))) }),
+	"floor":         any(func(x any) any { return any(math.Floor(feel_num(x))) }),
+	"round":         any(func(args ...any) any {
+		x := feel_num(args[0])
+		digits := 0
+		if len(args) >= 2 {
+			digits = int(feel_num(args[1]))
+		}
+		mult := math.Pow(10, float64(digits))
+		return any(math.Round(x*mult) / mult)
+	}),
+	"random":        any(func() any { return any(feel_rand_float()) }),
+	"random_int":    any(func(lo, hi any) any { return any(float64(feel_rand_int(int(feel_num(lo)), int(feel_num(hi))))) }),
+	"random_choice": any(func(items any) any {
+		l, _ := items.([]any)
+		if len(l) == 0 { return any(nil) }
+		return l[feel_rand_int(0, len(l)-1)]
+	}),
+}
+
+func feel_rand_float() float64 {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return 0
+	}
+	u := uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 |
+		uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56
+	return float64(u>>11) / float64(uint64(1)<<53)
+}
+
+func feel_rand_int(lo, hi int) int {
+	if hi < lo { lo, hi = hi, lo }
+	span := hi - lo + 1
+	return lo + int(feel_rand_float()*float64(span))
+}
+
+var feel_file_mod = map[string]any{
+	"read":     any(func(path any) any {
+		data, err := os.ReadFile(feel_str(path))
+		if err != nil { panic(feel_throw{value: any("file.read: " + err.Error())}) }
+		return any(string(data))
+	}),
+	"write":    any(func(path, content any) any {
+		err := os.WriteFile(feel_str(path), []byte(feel_str(content)), 0644)
+		if err != nil { panic(feel_throw{value: any("file.write: " + err.Error())}) }
+		return any(true)
+	}),
+	"append":   any(func(path, content any) any {
+		f, err := os.OpenFile(feel_str(path), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil { panic(feel_throw{value: any("file.append: " + err.Error())}) }
+		defer f.Close()
+		f.WriteString(feel_str(content))
+		return any(true)
+	}),
+	"exists":   any(func(path any) any { _, err := os.Stat(feel_str(path)); return any(err == nil) }),
+	"is_file":  any(func(path any) any { info, err := os.Stat(feel_str(path)); return any(err == nil && !info.IsDir()) }),
+	"is_dir":   any(func(path any) any { info, err := os.Stat(feel_str(path)); return any(err == nil && info.IsDir()) }),
+	"list_dir": any(func(path any) any {
+		entries, err := os.ReadDir(feel_str(path))
+		if err != nil { panic(feel_throw{value: any("file.list_dir: " + err.Error())}) }
+		out := make([]any, len(entries))
+		for i, e := range entries { out[i] = any(e.Name()) }
+		return any(out)
+	}),
+	"delete":   any(func(path any) any { err := os.Remove(feel_str(path)); return any(err == nil) }),
+	"basename": any(func(path any) any { return any(filepath.Base(feel_str(path))) }),
+	"dirname":  any(func(path any) any { return any(filepath.Dir(feel_str(path))) }),
+	"join":     any(func(parts ...any) any {
+		strs := make([]string, len(parts))
+		for i, p := range parts { strs[i] = feel_str(p) }
+		return any(filepath.Join(strs...))
+	}),
+}
+
+// ---------- Mail (mock + SMTP) ----------
+
+var feel_mail_lock sync.Mutex
+var feel_mail_sent []any
+
+func feel_mail_provider() string {
+	if p := os.Getenv("FEEL_MAIL_PROVIDER"); p != "" {
+		return strings.ToLower(p)
+	}
+	return "mock"
+}
+
+func feel_mail_send(message any) any {
+	msg, ok := message.(map[string]any)
+	if !ok {
+		panic(feel_throw{value: any("mail.send: expected a map")})
+	}
+	to, _ := msg["to"].(string)
+	subject, _ := msg["subject"].(string)
+	body, _ := msg["body"].(string)
+	from, _ := msg["from"].(string)
+	if to == "" {
+		panic(feel_throw{value: any("mail.send: missing 'to'")})
+	}
+	if subject == "" {
+		panic(feel_throw{value: any("mail.send: missing 'subject'")})
+	}
+	if body == "" {
+		panic(feel_throw{value: any("mail.send: missing 'body'")})
+	}
+	if from == "" {
+		from = os.Getenv("FEEL_MAIL_FROM")
+		if from == "" { from = "noreply@feel.local" }
+	}
+
+	p := feel_mail_provider()
+	if p == "mock" {
+		feel_mail_lock.Lock()
+		feel_mail_sent = append(feel_mail_sent, map[string]any{
+			"to": any(to), "subject": any(subject), "body": any(body), "from": any(from),
+		})
+		feel_mail_lock.Unlock()
+		return any(true)
+	}
+	if p == "smtp" {
+		// net/smtp not pulled in by default to keep binary small. To enable SMTP
+		// in a compiled build, edit this and add the smtp call. The interpreter
+		// supports SMTP via stdlib smtplib.
+		panic(feel_throw{value: any("mail.send: SMTP not supported in compiled build (use interpreter mode for SMTP, or extend feel_mail_send to call net/smtp)")})
+	}
+	panic(feel_throw{value: any("mail.send: unknown provider " + p)})
+}
+
+func feel_mail_sent_list() any {
+	feel_mail_lock.Lock()
+	defer feel_mail_lock.Unlock()
+	out := make([]any, len(feel_mail_sent))
+	copy(out, feel_mail_sent)
+	return any(out)
+}
+
+func feel_mail_clear_sent() any {
+	feel_mail_lock.Lock()
+	feel_mail_sent = nil
+	feel_mail_lock.Unlock()
+	return any(true)
+}
+
+var feel_mail_mod = map[string]any{
+	"send":       any(feel_mail_send),
+	"provider":   any(func() any { return any(feel_mail_provider()) }),
+	"sent":       any(feel_mail_sent_list),
+	"clear_sent": any(feel_mail_clear_sent),
+}
+
+// ---------- Auth helpers (M4-E follow-up) ----------
+
+func feel_auth_extract_bearer(request any) any {
+	req, ok := request.(map[string]any)
+	if !ok {
+		return any(nil)
+	}
+	headers, ok := req["headers"].(map[string]any)
+	if !ok {
+		return any(nil)
+	}
+	raw, _ := headers["authorization"].(string)
+	if raw == "" {
+		return any(nil)
+	}
+	if strings.HasPrefix(raw, "Bearer ") {
+		return any(raw[len("Bearer "):])
+	}
+	return any(nil)
+}
+
+func feel_auth_require_jwt(request, secret any) any {
+	tok := feel_auth_extract_bearer(request)
+	if tok == nil {
+		panic(feel_throw{value: any("auth: missing Authorization Bearer token")})
+	}
+	payload := feel_crypto_jwt_verify(tok, secret)
+	if payload == nil {
+		panic(feel_throw{value: any("auth: invalid or expired token")})
+	}
+	return payload
+}
+
+func feel_auth_optional_jwt(request, secret any) any {
+	tok := feel_auth_extract_bearer(request)
+	if tok == nil {
+		return any(nil)
+	}
+	return feel_crypto_jwt_verify(tok, secret)
+}
+
+var feel_auth_mod = map[string]any{
+	"extract_bearer": any(feel_auth_extract_bearer),
+	"require_jwt":    any(feel_auth_require_jwt),
+	"optional_jwt":   any(feel_auth_optional_jwt),
+}
+
+// ---------- Session helpers (HMAC-signed cookies) ----------
+
+func feel_sign_cookie_value(value, secret any) string {
+	v := feel_str(value)
+	sig := feel_str(feel_crypto_hmac_sha256(secret, any(v)))
+	return v + "." + sig
+}
+
+func feel_verify_cookie_value(signed, secret any) any {
+	s, ok := signed.(string)
+	if !ok {
+		return any(nil)
+	}
+	dot := strings.LastIndex(s, ".")
+	if dot < 0 {
+		return any(nil)
+	}
+	val := s[:dot]
+	sig := s[dot+1:]
+	expected := feel_str(feel_crypto_hmac_sha256(secret, any(val)))
+	if expected != sig {
+		return any(nil)
+	}
+	return any(val)
+}
+
+func feel_session_set(args ...any) any {
+	if len(args) < 4 {
+		panic(feel_throw{value: any("session.set: need (response, key, value, secret [, max_age])")})
+	}
+	resp, _ := args[0].(map[string]any)
+	if resp == nil {
+		resp = map[string]any{"status": any(200), "body": args[0]}
+	}
+	key := feel_str(args[1])
+	value := args[2]
+	secret := args[3]
+	maxAge := 86400
+	if len(args) >= 5 {
+		maxAge = int(feel_num(args[4]))
+	}
+	signed := feel_sign_cookie_value(value, secret)
+	cookie := fmt.Sprintf("%s=%s; Path=/; Max-Age=%d; HttpOnly; SameSite=Lax",
+		key, signed, maxAge)
+	cookies, _ := resp["__cookies__"].([]any)
+	cookies = append(cookies, any(cookie))
+	resp["__cookies__"] = any(cookies)
+	return any(resp)
+}
+
+func feel_session_get(request, key, secret any) any {
+	req, ok := request.(map[string]any)
+	if !ok {
+		return any(nil)
+	}
+	headers, ok := req["headers"].(map[string]any)
+	if !ok {
+		return any(nil)
+	}
+	raw, _ := headers["cookie"].(string)
+	if raw == "" {
+		return any(nil)
+	}
+	target := feel_str(key)
+	for _, part := range strings.Split(raw, ";") {
+		part = strings.TrimSpace(part)
+		eq := strings.IndexByte(part, '=')
+		if eq < 0 {
+			continue
+		}
+		if part[:eq] == target {
+			return feel_verify_cookie_value(any(strings.TrimSpace(part[eq+1:])), secret)
+		}
+	}
+	return any(nil)
+}
+
+func feel_session_clear(response, key any) any {
+	resp, _ := response.(map[string]any)
+	if resp == nil {
+		resp = map[string]any{"status": any(200), "body": response}
+	}
+	cookie := fmt.Sprintf("%s=; Path=/; Max-Age=0; HttpOnly", feel_str(key))
+	cookies, _ := resp["__cookies__"].([]any)
+	cookies = append(cookies, any(cookie))
+	resp["__cookies__"] = any(cookies)
+	return any(resp)
+}
+
+var feel_session_mod = map[string]any{
+	"set":   any(feel_session_set),
+	"get":   any(feel_session_get),
+	"clear": any(feel_session_clear),
+}
+
+// ---------- Cache (in-memory with TTL) ----------
+
+type feel_cache_entry struct {
+	value     any
+	expiresAt float64 // 0 = no expiry
+}
+
+var feel_cache_lock sync.RWMutex
+var feel_cache_store = map[string]feel_cache_entry{}
+
+func feel_cache_set(args ...any) any {
+	if len(args) < 2 {
+		panic(feel_throw{value: any("cache.set: need (key, value [, ttl_seconds])")})
+	}
+	key := feel_str(args[0])
+	val := args[1]
+	exp := 0.0
+	if len(args) >= 3 && args[2] != nil {
+		exp = feel_now_seconds() + feel_num(args[2])
+	}
+	feel_cache_lock.Lock()
+	feel_cache_store[key] = feel_cache_entry{value: val, expiresAt: exp}
+	feel_cache_lock.Unlock()
+	return val
+}
+
+func feel_cache_get(key any) any {
+	k := feel_str(key)
+	feel_cache_lock.RLock()
+	entry, ok := feel_cache_store[k]
+	feel_cache_lock.RUnlock()
+	if !ok {
+		return any(nil)
+	}
+	if entry.expiresAt > 0 && entry.expiresAt <= feel_now_seconds() {
+		feel_cache_lock.Lock()
+		delete(feel_cache_store, k)
+		feel_cache_lock.Unlock()
+		return any(nil)
+	}
+	return entry.value
+}
+
+func feel_cache_has(key any) any {
+	cached := feel_cache_get(key)
+	return any(cached != nil)
+}
+
+func feel_cache_delete(key any) any {
+	feel_cache_lock.Lock()
+	delete(feel_cache_store, feel_str(key))
+	feel_cache_lock.Unlock()
+	return any(true)
+}
+
+func feel_cache_clear() any {
+	feel_cache_lock.Lock()
+	feel_cache_store = map[string]feel_cache_entry{}
+	feel_cache_lock.Unlock()
+	return any(true)
+}
+
+func feel_cache_size() any {
+	feel_cache_lock.Lock()
+	defer feel_cache_lock.Unlock()
+	now := feel_now_seconds()
+	dead := []string{}
+	for k, e := range feel_cache_store {
+		if e.expiresAt > 0 && e.expiresAt <= now {
+			dead = append(dead, k)
+		}
+	}
+	for _, k := range dead {
+		delete(feel_cache_store, k)
+	}
+	return any(float64(len(feel_cache_store)))
+}
+
+func feel_cache_get_or_compute(key, ttl, producer any) any {
+	cached := feel_cache_get(key)
+	if cached != nil {
+		return cached
+	}
+	value := feel_call(producer, nil)
+	feel_cache_set(key, value, ttl)
+	return value
+}
+
+var feel_cache_mod = map[string]any{
+	"set":            any(feel_cache_set),
+	"get":            any(feel_cache_get),
+	"get_or_compute": any(feel_cache_get_or_compute),
+	"has":            any(feel_cache_has),
+	"delete":         any(feel_cache_delete),
+	"clear":          any(feel_cache_clear),
+	"size":           any(feel_cache_size),
 }
 
 // ---------- Agent / tool ----------

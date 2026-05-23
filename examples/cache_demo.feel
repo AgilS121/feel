@@ -1,0 +1,20 @@
+-- Cache module — compile-to-native check.
+
+cache.set("hello", "world")
+show -> cache.get("hello")
+show -> cache.size()
+
+cache.set("temp", "evicted", 0)
+time.sleep(50)
+show -> cache.get("temp")
+
+-- get_or_compute (memoization)
+define expensive -> "computed"
+let v1 = cache.get_or_compute("k", 60, expensive)
+let v2 = cache.get_or_compute("k", 60, expensive)
+show -> v1
+show -> v2 == v1
+
+cache.clear()
+show -> cache.size()
+show -> "cache_demo OK"
