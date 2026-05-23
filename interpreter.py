@@ -734,8 +734,10 @@ class Interpreter:
             }
             local = Environment(closure_env)
             local.set('request', request_map)
-            local.set('body', feel_request.body)
+            local.set('body',  feel_request.body)
             local.set('query', feel_request.query)
+            local.set('files', feel_request.files)
+            local.set('form',  feel_request.form)
             for k, v in feel_request.params.items():
                 local.set(k, v)
             # WebSocket handler: expose `ws` in scope.
