@@ -747,7 +747,15 @@ class Interpreter:
             sub.source = source
             sub.search_paths = self.search_paths
             sub.record_types = self.record_types
-            return sub.eval_expr(handler_ast)
+            try:
+                return sub.eval_expr(handler_ast)
+            except FeelThrow as ft:
+                # `throw map { status: 4xx, ... }` — convert to HTTP response
+                from runtime.http import FeelResponse
+                val = ft.value
+                if isinstance(val, dict) and 'status' in val:
+                    return FeelResponse(status=int(val['status']), body=val)
+                return FeelResponse(status=500, body={'error': 'unhandled_throw', 'message': str(val)})
 
         global_registry().register(route_node.method, route_node.path, py_handler)
 
