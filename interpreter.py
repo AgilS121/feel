@@ -378,8 +378,10 @@ class Interpreter:
                             filename=self.filename, source=self.source)
                     self.env.set(nm, module.env.get(nm))
             else:
-                # import as namespace
-                self.env.set(node.name, module)
+                # import as namespace — bind to last path segment so
+                # `import auth/service` is usable as `service.funcname`
+                bind_name = node.name.split('/')[-1]
+                self.env.set(bind_name, module)
             return module
 
         if isinstance(node, RouteDecl):

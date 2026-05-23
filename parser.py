@@ -452,9 +452,19 @@ class Parser:
         expr = self.parse_expr()
         return _pos(ThrowStmt(expr), t)
 
+    def _parse_module_path(self, first_ident):
+        """Parse a module path: IDENT ('/' IDENT)*  — e.g. 'auth/service'."""
+        parts = [first_ident]
+        while (self.current() and self.current().type == 'SLASH'
+               and self.peek(1) and self.peek(1).type == 'IDENT'):
+            self.advance()  # consume '/'
+            parts.append(self.advance().value)  # consume next IDENT
+        return '/'.join(parts)
+
     def parse_import(self):
         t = self.advance()  # import
-        name = self.expect('IDENT', hint="'import' must be followed by a module name").value
+        first = self.expect('IDENT', hint="'import' must be followed by a module name").value
+        name = self._parse_module_path(first)
         expose = None
         if self.current() and self.current().type == 'EXPOSE':
             self.advance()
@@ -469,7 +479,8 @@ class Parser:
 
     def parse_from_import(self):
         t = self.advance()  # from
-        name = self.expect('IDENT', hint="'from' must be followed by a module name").value
+        first = self.expect('IDENT', hint="'from' must be followed by a module name").value
+        name = self._parse_module_path(first)
         self.expect('IMPORT', hint="module name must be followed by 'import'")
         names = []
         while self.current() and self.current().type == 'IDENT':
