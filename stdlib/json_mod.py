@@ -4,6 +4,7 @@ import json as _json
 
 
 def _to_jsonable(v):
+    import datetime, decimal
     from interpreter import FeelRecord
     if isinstance(v, FeelRecord):
         return {k: _to_jsonable(vv) for k, vv in v.fields.items()}
@@ -11,6 +12,15 @@ def _to_jsonable(v):
         return {k: _to_jsonable(vv) for k, vv in v.items()}
     if isinstance(v, list):
         return [_to_jsonable(x) for x in v]
+    # MySQL types not natively JSON-serializable
+    if isinstance(v, datetime.datetime):
+        return v.isoformat()
+    if isinstance(v, datetime.date):
+        return v.isoformat()
+    if isinstance(v, datetime.timedelta):
+        return str(v)
+    if isinstance(v, decimal.Decimal):
+        return float(v)
     return v
 
 
