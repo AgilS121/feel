@@ -1,0 +1,38 @@
+# Feel
+
+> AI-adoptable backend programming language. First-class REST, AI, DB, and auth primitives. Compiles to standalone Go binaries.
+
+Feel is a new programming language designed for the AI-collaboration era. It makes backend APIs writable in fewer lines with a single canonical syntax that AI tools (Claude, Copilot, Cursor) can generate with higher first-try accuracy.
+
+## Key Facts
+- Version: v0.18 (experimental)
+- Paradigm: functional-imperative, expression-oriented
+- Target: backend REST APIs, AI-augmented services, internal tools
+- Runtime: Python 3.7+ interpreter (dev) or compiled Go binary (prod)
+- DB support: SQLite, MySQL, PostgreSQL
+- AI support: Claude (Anthropic), mock provider
+
+## Core Keywords
+route, respond, serve, when, otherwise, define, let, do, record, tool, agent, import
+
+## Stdlib Namespaces
+db, ai, crypto, auth, session, validate, migrate, cache, mail, queue, security, string, list, map, json, time, file, math
+
+## What Makes Feel Different
+1. Single canonical syntax — one way per concept, no style debates
+2. Parser-enforced naming conventions (snake_case vars, PascalCase records)
+3. Machine-parseable errors with stable codes (E_UNDEFINED_NAME, E_TYPE, etc.)
+4. REST API as a keyword (route/respond/serve)
+5. AI primitives in stdlib (ai.ask, ai.summarize, ai.classify, ai.chat)
+6. Compiles to standalone Go binary — no runtime dependency at deployment
+
+## Repository Structure
+- main.py — CLI entry point
+- lexer.py, parser.py, interpreter.py — core language
+- compile_go.py — Feel → Go transpiler
+- stdlib/ — 18 built-in namespaces
+- tests/ — test suite
+- examples/ — 15+ demo programs
+
+## Author
+AgilS121 — language design, direction, implementation partner with Claude (Anthropic)

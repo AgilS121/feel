@@ -1,10 +1,15 @@
 # Feel
 
-**An AI-predictable backend language.** First-class AI primitives. REST API as a keyword. Strict canonical syntax so AI tools generate Feel with higher first-try accuracy than general-purpose languages.
+![Version](https://img.shields.io/badge/version-v0.18-blue)
+![Python](https://img.shields.io/badge/python-3.7+-green)
+![Go](https://img.shields.io/badge/compiles%20to-Go-00ADD8)
+![License](https://img.shields.io/badge/license-proprietary-lightgrey)
 
-**Compiles to standalone Go binaries** — no Python, no runtime install at user-side. Same source runs in two modes: Python interpreter for dev, native binary for prod.
+**An AI-native backend programming language and developer tool.** First-class AI primitives. REST API as a keyword. Strict canonical syntax so AI tools generate Feel with higher first-try accuracy than general-purpose languages.
 
-> **Status:** v0.14 · experimental · 80+ tests passing · 18 stdlib namespaces · Laravel-feature parity for a usable subset
+**Compiles to standalone Go binaries** — no Python, no runtime install at user-side. The same source runs in two modes: Python interpreter for dev, native binary for prod. Feel is purpose-built as a REST API language for the AI-collaboration era — where Claude, Copilot, and Cursor write backend code alongside you.
+
+> **Status:** v0.18 · experimental · 80+ tests passing · 18 stdlib namespaces · Laravel-feature parity for a usable subset
 
 ---
 
@@ -30,7 +35,7 @@ Other shells: `feel.bat` (cmd), `feel.ps1` (PowerShell), `./feel` (bash) — see
 
 ## Why Feel?
 
-In the AI-collaboration era — when Claude, Cursor, Copilot are routinely writing your code — **language design itself becomes an AI-affordance**. Feel makes four bets:
+In the AI-collaboration era — when Claude, Cursor, Copilot are routinely writing your code — **language design itself becomes an AI-affordance**. Feel is an AI-adoptable backend programming language that compiles to Go, making four bets:
 
 1. **Single canonical syntax.** One way per concept. No dialects, no sugar, no decorator-magic. AI tools (and humans) never need to "figure out the style of this codebase."
 2. **Parser-enforced conventions.** `snake_case` for vars/funcs, `PascalCase` for records — violations are syntax errors with auto-fix hints, not linter warnings.
@@ -268,6 +273,21 @@ Both modes work:
 
 ---
 
+## Real-World Showcase
+
+**HRIS System** — A full HR management system built entirely in Feel:
+- Multi-tenant: companies, departments, positions, employees
+- Attendance with GPS + selfie upload (multipart/form-data)
+- Leave management with balance tracking
+- Payroll with components and payslips
+- RBAC (roles, menus, permissions)
+- JWT auth with temp credentials
+- React admin panel + React Native mobile app
+
+Backend: ~15 Feel files, ~800 lines. Equivalent Laravel project: ~60 files, ~4000 lines.
+
+---
+
 ## Commands
 
 ```bash
@@ -359,24 +379,24 @@ feel/
 | `v0.12` | cache — in-memory KV with TTL |
 | `v0.13` | mail — SMTP + mock |
 | **`v0.14`** | **queue — SQLite-backed jobs + worker** |
+| `v0.15` | ✅ String escape sequences (`\n`, `\"`, `\t`) |
+| `v0.16` | ✅ HTTP client outbound + WebSocket / SSE |
+| `v0.17` | ✅ File upload (multipart) + int64 numeric precision + form-urlencoded body parser + static file serving |
+| `v0.18` | ✅ Port v0.8-v0.14 stdlib to Go runtime + pagination, soft deletes, auto timestamps + env module |
 
 ### Next
 
 | Priority | Target | ETA |
 |---|---|---|
 | 🔴 P0 | LSP server (syntax highlight, autocomplete, hover) | 3-6 months |
-| 🔴 P0 | String escape sequences (`\n`, `\"`, `\t`) | 1 week |
 | 🔴 P0 | Cross-platform release binaries (Linux/Mac/Win) | 2 weeks |
-| 🟠 P1 | Port v0.8-v0.14 stdlib to Go runtime | 2-3 sessions |
 | 🟠 P1 | Docs site + auto-generated API reference | 1 month |
 | 🟠 P1 | Real MySQL/Postgres testing (Docker fixtures) | 2 weeks |
 | 🟠 P1 | Eloquent-style relationships (hasMany, belongsTo) | 1-2 months |
 | 🟡 P2 | argon2 + RS256 JWT | 1 week |
 | 🟡 P2 | Hot reload dev server | 2 weeks |
-| 🟡 P2 | Pagination, soft deletes, auto timestamps | 2 weeks |
 | 🔵 P3 | Templating engine (HTML rendering) | 1 month |
 | 🔵 P3 | Event/Listener system | 1 month |
-| 🔵 P3 | WebSocket / SSE | 1-2 months |
 | 🔵 P3 | Self-host compiler (Feel-in-Feel) | 1-2 years |
 | 🔵 P3 | Package manager + registry | 1+ year |
 
@@ -415,7 +435,7 @@ License is undecided pending v1.0. Repository is shared as-is for collaboration.
 
 Feel is developed as a 50/50 collaboration:
 
-- **AgilS121** (Indonesia, DTIT / TUV Nord) — language design, direction, strategic decisions
+- **AgilS121** — language design, direction, strategic decisions
 - **Claude** (Anthropic) — implementation, testing, documentation co-author
 
 Every commit since v0.2 reflects this partnership.

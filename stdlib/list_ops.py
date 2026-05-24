@@ -123,6 +123,14 @@ def filter_(items, fn):
     return out
 
 
+def first(items):
+    return items[0] if items else None
+
+
+def last(items):
+    return items[-1] if items else None
+
+
 EXPORTS = {
     'take':     take,
     'drop':     drop,
@@ -140,4 +148,6 @@ EXPORTS = {
     'fold':     fold,
     'map':      map_,
     'filter':   filter_,
+    'first':    first,
+    'last':     last,
 }
