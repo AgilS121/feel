@@ -1,0 +1,138 @@
+{
+  "name": "feel-lang",
+  "displayName": "Feel Language",
+  "description": "Language support for Feel — the AI-native backend programming language. Syntax highlighting, snippets, and language features for .feel files.",
+  "version": "0.1.0",
+  "publisher": "Dobith",
+  "author": {
+    "name": "AgilS121",
+    "email": "bharataitteam@gmail.com"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/agil-bharata/feel",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/agil-bharata/feel"
+  },
+  "bugs": {
+    "url": "https://github.com/agil-bharata/feel/issues"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets",
+    "Formatters"
+  ],
+  "keywords": [
+    "feel",
+    "feel-lang",
+    "ai-native",
+    "backend",
+    "programming language",
+    "rest api",
+    "agil-bharata"
+  ],
+  "icon": "icons/icon.png",
+  "galleryBanner": {
+    "color": "#1a1a2e",
+    "theme": "dark"
+  },
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "feel",
+        "aliases": [
+          "Feel",
+          "feel-lang"
+        ],
+        "extensions": [
+          ".feel"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/feel-file-light.svg",
+          "dark": "./icons/feel-file-dark.svg"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "feel",
+        "scopeName": "source.feel",
+        "path": "./syntaxes/feel.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "feel",
+        "path": "./snippets/feel.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "feel.runFile",
+        "title": "Feel: Run Current File",
+        "icon": "$(play)"
+      },
+      {
+        "command": "feel.formatDocument",
+        "title": "Feel: Format Document"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "when": "resourceLangId == feel",
+          "command": "feel.runFile",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "when": "resourceLangId == feel",
+          "command": "feel.runFile",
+          "group": "1_run"
+        },
+        {
+          "when": "resourceLangId == feel",
+          "command": "feel.formatDocument",
+          "group": "1_run"
+        }
+      ]
+    },
+    "themes": [],
+    "configuration": {
+      "type": "object",
+      "title": "Feel Language",
+      "properties": {
+        "feel.interpreter.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the Feel interpreter (main.py or feel binary). Leave empty to auto-detect."
+        },
+        "feel.formatting.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable auto-formatting on save using feelfmt."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0",
+    "@types/node": "^18.0.0",
+    "typescript": "^5.0.0",
+    "@vscode/vsce": "^2.22.0"
+  }
+}

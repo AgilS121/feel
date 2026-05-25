@@ -1,0 +1,415 @@
+{
+  "Hello API": {
+    "prefix": "hello-api",
+    "body": [
+      "route GET \"/hello\" -> respond map { message: \"Hello, Feel!\" }",
+      "",
+      "serve on ${1:3000}"
+    ],
+    "description": "Basic Hello World REST API"
+  },
+  "Route GET": {
+    "prefix": ["route-get", "rget"],
+    "body": [
+      "route GET \"/${1:path}\" -> do {",
+      "  $0",
+      "  respond map { message: \"ok\" }",
+      "}"
+    ],
+    "description": "GET route handler"
+  },
+  "Route GET with param": {
+    "prefix": ["route-get-param", "rgetp"],
+    "body": [
+      "route GET \"/${1:resource}/{id}\" -> do {",
+      "  $0",
+      "  respond map { id: id }",
+      "}"
+    ],
+    "description": "GET route with path parameter"
+  },
+  "Route POST": {
+    "prefix": ["route-post", "rpost"],
+    "body": [
+      "route POST \"/${1:path}\" -> do {",
+      "  $0",
+      "  respond 201 map { message: \"created\" }",
+      "}"
+    ],
+    "description": "POST route handler"
+  },
+  "Route PUT": {
+    "prefix": ["route-put", "rput"],
+    "body": [
+      "route PUT \"/${1:resource}/{id}\" -> do {",
+      "  $0",
+      "  respond map { message: \"updated\" }",
+      "}"
+    ],
+    "description": "PUT route handler"
+  },
+  "Route PATCH": {
+    "prefix": ["route-patch", "rpatch"],
+    "body": [
+      "route PATCH \"/${1:resource}/{id}\" -> do {",
+      "  $0",
+      "  respond map { message: \"patched\" }",
+      "}"
+    ],
+    "description": "PATCH route handler"
+  },
+  "Route DELETE": {
+    "prefix": ["route-delete", "rdel"],
+    "body": [
+      "route DELETE \"/${1:resource}/{id}\" -> do {",
+      "  $0",
+      "  respond map { message: \"deleted\" }",
+      "}"
+    ],
+    "description": "DELETE route handler"
+  },
+  "Serve": {
+    "prefix": "serve",
+    "body": "serve on ${1:3000}",
+    "description": "Start HTTP server"
+  },
+  "Serve with CORS": {
+    "prefix": "serve-cors",
+    "body": "serve on ${1:3000} cors",
+    "description": "Start HTTP server with CORS enabled"
+  },
+  "Let binding": {
+    "prefix": "let",
+    "body": "let ${1:name} = ${2:value}",
+    "description": "Immutable variable binding"
+  },
+  "Define function": {
+    "prefix": ["define", "def"],
+    "body": [
+      "define ${1:function_name} taking ${2:param} ->",
+      "  $0"
+    ],
+    "description": "Named function definition"
+  },
+  "Define function no params": {
+    "prefix": "define0",
+    "body": [
+      "define ${1:function_name} ->",
+      "  $0"
+    ],
+    "description": "Named function definition without parameters"
+  },
+  "Lambda": {
+    "prefix": "fn",
+    "body": "fn ${1:x} -> ${2:body}",
+    "description": "Anonymous lambda function"
+  },
+  "Lambda block": {
+    "prefix": "fndo",
+    "body": [
+      "fn ${1:x} -> do {",
+      "  $0",
+      "}"
+    ],
+    "description": "Lambda with block body"
+  },
+  "Do block": {
+    "prefix": "do",
+    "body": [
+      "do {",
+      "  $0",
+      "}"
+    ],
+    "description": "Do block expression (creates new scope)"
+  },
+  "Record definition": {
+    "prefix": "record",
+    "body": [
+      "record ${1:TypeName} {",
+      "  ${2:field}: ${3:text}$0",
+      "}"
+    ],
+    "description": "Record type definition (PascalCase)"
+  },
+  "When/Otherwise": {
+    "prefix": "when",
+    "body": "when ${1:condition} -> ${2:then} otherwise -> ${3:else}",
+    "description": "Conditional expression"
+  },
+  "When statement": {
+    "prefix": "when-stmt",
+    "body": [
+      "when ${1:condition} -> do {",
+      "  $0",
+      "} otherwise -> do {",
+      "  ",
+      "}"
+    ],
+    "description": "Conditional statement with blocks"
+  },
+  "For loop": {
+    "prefix": "for",
+    "body": [
+      "for ${1:item} in ${2:collection} -> do {",
+      "  $0",
+      "}"
+    ],
+    "description": "For-in loop"
+  },
+  "Repeat loop": {
+    "prefix": "repeat",
+    "body": [
+      "repeat ${1:5} times -> do {",
+      "  $0",
+      "}"
+    ],
+    "description": "Repeat N times loop"
+  },
+  "Try/Catch": {
+    "prefix": "try",
+    "body": [
+      "try",
+      "  ${1:risky_operation()}",
+      "catch ${2:err} ->",
+      "  ${3:handle(err)}"
+    ],
+    "description": "Try/catch error handling"
+  },
+  "Try expression": {
+    "prefix": "try-expr",
+    "body": "let ${1:result} = try ${2:risky()} catch ${3:err} -> ${4:default_value}",
+    "description": "Try/catch as expression"
+  },
+  "Throw": {
+    "prefix": "throw",
+    "body": "throw \"${1:error message}\"",
+    "description": "Throw an error"
+  },
+  "Import": {
+    "prefix": "import",
+    "body": "import ${1:module_name}",
+    "description": "Import a module"
+  },
+  "Import expose": {
+    "prefix": "import-expose",
+    "body": "import ${1:module_name} expose ${2:function_name}",
+    "description": "Import and expose specific exports"
+  },
+  "Show": {
+    "prefix": "show",
+    "body": "show -> ${1:value}",
+    "description": "Print/display a value"
+  },
+  "Map literal": {
+    "prefix": "map",
+    "body": "map { ${1:key}: ${2:value} }",
+    "description": "Map/dictionary literal"
+  },
+  "List literal": {
+    "prefix": "list",
+    "body": "[${1:item1}, ${2:item2}]",
+    "description": "List literal"
+  },
+  "Assert": {
+    "prefix": "assert",
+    "body": "assert ${1:condition}, \"${2:message}\"",
+    "description": "Assert statement"
+  },
+  "DB connect": {
+    "prefix": "db-connect",
+    "body": "let ${1:conn} = db.connect(\"${2::memory:}\")",
+    "description": "Connect to database"
+  },
+  "DB connect MySQL": {
+    "prefix": "db-mysql",
+    "body": "let ${1:conn} = db.connect(\"mysql://${2:user}:${3:pass}@${4:localhost}:3306/${5:dbname}\")",
+    "description": "Connect to MySQL database"
+  },
+  "DB connect Postgres": {
+    "prefix": "db-postgres",
+    "body": "let ${1:conn} = db.connect(\"postgres://${2:user}:${3:pass}@${4:localhost}:5432/${5:dbname}\")",
+    "description": "Connect to PostgreSQL database"
+  },
+  "DB query": {
+    "prefix": "db-query",
+    "body": "let ${1:rows} = db.query(${2:conn}, \"SELECT * FROM ${3:table} WHERE ${4:id} = ?\", [${5:id}])",
+    "description": "Database SELECT query"
+  },
+  "DB query one": {
+    "prefix": "db-query-one",
+    "body": "let ${1:row} = db.query_one(${2:conn}, \"SELECT * FROM ${3:table} WHERE id = ?\", [${4:id}])",
+    "description": "Database SELECT single row"
+  },
+  "DB exec": {
+    "prefix": "db-exec",
+    "body": "let ${1:affected} = db.exec(${2:conn}, \"${3:INSERT INTO table (col) VALUES (?)}\", [${4:value}])",
+    "description": "Database execute (INSERT/UPDATE/DELETE)"
+  },
+  "DB transaction": {
+    "prefix": "db-transaction",
+    "body": [
+      "db.transaction(${1:conn}, fn -> do {",
+      "  $0",
+      "  \"done\"",
+      "})"
+    ],
+    "description": "Database transaction block"
+  },
+  "Validate shape": {
+    "prefix": "validate",
+    "body": "let ${1:data} = validate.shape(${2:body}, \"${3:RecordType}\")",
+    "description": "Validate request body against a record type"
+  },
+  "Crypto hash": {
+    "prefix": "crypto-hash",
+    "body": "let ${1:hash} = crypto.hash_password(${2:password})",
+    "description": "Hash a password with PBKDF2"
+  },
+  "JWT sign": {
+    "prefix": "jwt-sign",
+    "body": "let ${1:token} = crypto.jwt_sign(map { ${2:user_id}: ${3:id} }, ${4:secret})",
+    "description": "Sign a JWT token"
+  },
+  "JWT verify": {
+    "prefix": "jwt-verify",
+    "body": "let ${1:claims} = crypto.jwt_verify(${2:token}, ${3:secret})",
+    "description": "Verify and decode a JWT token"
+  },
+  "Auth require JWT": {
+    "prefix": "auth-jwt",
+    "body": "let ${1:claims} = auth.require_jwt(request, ${2:secret})",
+    "description": "Require a valid JWT in the request"
+  },
+  "AI ask": {
+    "prefix": "ai-ask",
+    "body": "let ${1:answer} = ai.ask(\"${2:question}\", ${3:context})",
+    "description": "Ask the AI a question"
+  },
+  "AI classify": {
+    "prefix": "ai-classify",
+    "body": "let ${1:label} = ai.classify(${2:text}, [\"${3:label1}\", \"${4:label2}\"])",
+    "description": "Classify text into categories"
+  },
+  "AI summarize": {
+    "prefix": "ai-summarize",
+    "body": "let ${1:summary} = ai.summarize(${2:text})",
+    "description": "Summarize text with AI"
+  },
+  "Tool definition": {
+    "prefix": "tool",
+    "body": [
+      "tool ${1:tool_name} \"${2:Description of what this tool does}\" taking ${3:param} ->",
+      "  $0"
+    ],
+    "description": "Define a tool for AI agents"
+  },
+  "Agent definition": {
+    "prefix": "agent",
+    "body": [
+      "agent ${1:agent_name} {",
+      "  system: \"${2:You are a helpful assistant.}\",",
+      "  tools: [${3:tool_name}],",
+      "  model: nothing",
+      "}"
+    ],
+    "description": "Define an AI agent"
+  },
+  "List map": {
+    "prefix": "list-map",
+    "body": "list.map(${1:items}, fn ${2:x} -> ${3:x * 2})",
+    "description": "Map over a list"
+  },
+  "List filter": {
+    "prefix": "list-filter",
+    "body": "list.filter(${1:items}, fn ${2:x} -> ${3:x > 0})",
+    "description": "Filter a list"
+  },
+  "List fold": {
+    "prefix": "list-fold",
+    "body": "list.fold(${1:items}, ${2:0}, fn ${3:acc}, ${4:x} -> ${3:acc} + ${4:x})",
+    "description": "Fold/reduce a list"
+  },
+  "Pipeline": {
+    "prefix": "pipe",
+    "body": "${1:value} | ${2:function}",
+    "description": "Pipeline operator"
+  },
+  "Env get": {
+    "prefix": "env-get",
+    "body": "let ${1:val} = env.get(\"${2:VAR_NAME}\", \"${3:default}\")",
+    "description": "Get an environment variable"
+  },
+  "Cache get or compute": {
+    "prefix": "cache-compute",
+    "body": [
+      "let ${1:result} = cache.get_or_compute(\"${2:cache_key}\", ${3:60}, fn ->",
+      "  $0",
+      ")"
+    ],
+    "description": "Get from cache or compute and store"
+  },
+  "CRUD REST scaffold": {
+    "prefix": "crud-rest",
+    "body": [
+      "let ${1:conn} = db.connect(\"${2::memory:}\")",
+      "",
+      "route GET \"/${3:items}\" -> do {",
+      "  let rows = db.query(${1:conn}, \"SELECT * FROM ${3:items}\", [])",
+      "  respond rows",
+      "}",
+      "",
+      "route GET \"/${3:items}/{id}\" -> do {",
+      "  let row = db.query_one(${1:conn}, \"SELECT * FROM ${3:items} WHERE id = ?\", [id])",
+      "  when row == nothing -> respond 404 map { error: \"not found\" }",
+      "  otherwise -> respond row",
+      "}",
+      "",
+      "route POST \"/${3:items}\" -> do {",
+      "  db.exec(${1:conn}, \"INSERT INTO ${3:items} (name) VALUES (?)\", [body[\"name\"]])",
+      "  let new_id = db.last_id(${1:conn})",
+      "  respond 201 map { id: new_id }",
+      "}",
+      "",
+      "route PUT \"/${3:items}/{id}\" -> do {",
+      "  db.exec(${1:conn}, \"UPDATE ${3:items} SET name = ? WHERE id = ?\", [body[\"name\"], id])",
+      "  respond map { message: \"updated\" }",
+      "}",
+      "",
+      "route DELETE \"/${3:items}/{id}\" -> do {",
+      "  db.exec(${1:conn}, \"DELETE FROM ${3:items} WHERE id = ?\", [id])",
+      "  respond map { message: \"deleted\" }",
+      "}",
+      "",
+      "serve on ${4:3000} cors"
+    ],
+    "description": "Full CRUD REST API scaffold"
+  },
+  "Auth scaffold": {
+    "prefix": "auth-scaffold",
+    "body": [
+      "let ${1:secret} = env.get(\"JWT_SECRET\", \"change-me\")",
+      "let ${2:conn} = db.connect(\"${3::memory:}\")",
+      "",
+      "route POST \"/register\" -> do {",
+      "  let data = validate.shape(body, \"${4:UserInput}\")",
+      "  let hash = crypto.hash_password(data[\"password\"])",
+      "  db.exec(${2:conn}, \"INSERT INTO users (email, password_hash) VALUES (?, ?)\", [data[\"email\"], hash])",
+      "  let user_id = db.last_id(${2:conn})",
+      "  let token = crypto.jwt_sign(map { user_id: user_id }, ${1:secret})",
+      "  respond 201 map { token: token }",
+      "}",
+      "",
+      "route POST \"/login\" -> do {",
+      "  let user = db.query_one(${2:conn}, \"SELECT * FROM users WHERE email = ?\", [body[\"email\"]])",
+      "  when user == nothing -> respond 401 map { error: \"invalid credentials\" }",
+      "  let valid = crypto.verify_password(body[\"password\"], user[\"password_hash\"])",
+      "  when not valid -> respond 401 map { error: \"invalid credentials\" }",
+      "  let token = crypto.jwt_sign(map { user_id: user[\"id\"] }, ${1:secret})",
+      "  respond map { token: token }",
+      "}",
+      "",
+      "serve on ${5:3000} cors"
+    ],
+    "description": "JWT authentication scaffold (register + login)"
+  }
+}

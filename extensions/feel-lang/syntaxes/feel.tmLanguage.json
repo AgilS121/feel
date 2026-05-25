@@ -1,0 +1,261 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Feel",
+  "scopeName": "source.feel",
+  "fileTypes": ["feel"],
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#string" },
+    { "include": "#number" },
+    { "include": "#http-method" },
+    { "include": "#keyword-control" },
+    { "include": "#keyword-declaration" },
+    { "include": "#keyword-operator" },
+    { "include": "#keyword-other" },
+    { "include": "#constant-language" },
+    { "include": "#support-function" },
+    { "include": "#record-type" },
+    { "include": "#function-call" },
+    { "include": "#operator" },
+    { "include": "#punctuation" },
+    { "include": "#identifier" }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.double-dash.feel",
+      "match": "--.*$"
+    },
+    "string": {
+      "name": "string.quoted.double.feel",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.feel",
+          "match": "\\\\[ntr0\"\\\\{}]"
+        },
+        {
+          "name": "meta.interpolation.feel",
+          "begin": "(?<!\\\\)\\{",
+          "end": "\\}",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.interpolation.begin.feel" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.interpolation.end.feel" }
+          },
+          "patterns": [
+            { "include": "#comment" },
+            { "include": "#number" },
+            { "include": "#keyword-operator" },
+            { "include": "#constant-language" },
+            { "include": "#support-function" },
+            { "include": "#function-call" },
+            { "include": "#operator" },
+            { "include": "#identifier" }
+          ]
+        }
+      ]
+    },
+    "number": {
+      "name": "constant.numeric.feel",
+      "match": "\\b[0-9]+(?:\\.[0-9]+)?\\b"
+    },
+    "http-method": {
+      "name": "support.type.http-method.feel",
+      "match": "\\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|WS)\\b"
+    },
+    "keyword-control": {
+      "name": "keyword.control.feel",
+      "match": "\\b(when|otherwise|repeat|times|for|in|try|catch|throw|do)\\b"
+    },
+    "keyword-declaration": {
+      "name": "keyword.declaration.feel",
+      "match": "\\b(let|define|taking|record|tool|agent|import|expose|from|fn)\\b"
+    },
+    "keyword-other": {
+      "name": "keyword.other.feel",
+      "match": "\\b(show|route|respond|serve|on|static|cors|tls|assert|map)\\b"
+    },
+    "keyword-operator": {
+      "name": "keyword.operator.logical.feel",
+      "match": "\\b(and|or|not)\\b"
+    },
+    "constant-language": {
+      "name": "constant.language.feel",
+      "match": "\\b(true|false|nothing)\\b"
+    },
+    "support-function": {
+      "patterns": [
+        {
+          "name": "support.type.module.feel",
+          "match": "\\b(string|list|map|json|time|file|math|db|ai|crypto|auth|session|validate|migrate|cache|mail|queue|security|env|http)\\b(?=\\.)"
+        },
+        {
+          "comment": "string module functions",
+          "name": "support.function.string.feel",
+          "match": "(?<=string\\.)(upper|lower|trim|starts_with|ends_with|contains|replace|slice|words|lines|repeat|index_of|split|pad_left|pad_right|length)\\b"
+        },
+        {
+          "comment": "list module functions",
+          "name": "support.function.list.feel",
+          "match": "(?<=list\\.)(map|filter|fold|sort|reverse|unique|take|drop|flatten|count|range|index_of|all|any|push|pop|head|tail|zip)\\b"
+        },
+        {
+          "comment": "map module functions",
+          "name": "support.function.map.feel",
+          "match": "(?<=map\\.)(get|set|has|delete|keys|values|entries|merge|size)\\b"
+        },
+        {
+          "comment": "json module functions",
+          "name": "support.function.json.feel",
+          "match": "(?<=json\\.)(encode|decode)\\b"
+        },
+        {
+          "comment": "db module functions",
+          "name": "support.function.db.feel",
+          "match": "(?<=db\\.)(connect|exec|query|query_one|last_id|close|begin|commit|rollback|transaction|find|where|order_by|take|all|count|first|paginate)\\b"
+        },
+        {
+          "comment": "ai module functions",
+          "name": "support.function.ai.feel",
+          "match": "(?<=ai\\.)(ask|summarize|classify|chat|provider)\\b"
+        },
+        {
+          "comment": "crypto module functions",
+          "name": "support.function.crypto.feel",
+          "match": "(?<=crypto\\.)(hash_password|verify_password|jwt_sign|jwt_verify|hmac_sha256|base64_encode|base64_decode|random_token)\\b"
+        },
+        {
+          "comment": "auth module functions",
+          "name": "support.function.auth.feel",
+          "match": "(?<=auth\\.)(require_jwt|optional_jwt|extract_bearer)\\b"
+        },
+        {
+          "comment": "math module functions",
+          "name": "support.function.math.feel",
+          "match": "(?<=math\\.)(pi|e|sqrt|pow|log|sin|cos|tan|ceil|floor|round|random|random_int|abs)\\b"
+        },
+        {
+          "comment": "time module functions",
+          "name": "support.function.time.feel",
+          "match": "(?<=time\\.)(now|now_ms|format|parse|sleep)\\b"
+        },
+        {
+          "comment": "file module functions",
+          "name": "support.function.file.feel",
+          "match": "(?<=file\\.)(read|write|append|exists|delete|list_dir)\\b"
+        },
+        {
+          "comment": "validate module functions",
+          "name": "support.function.validate.feel",
+          "match": "(?<=validate\\.)(shape|is_valid|errors_for|against)\\b"
+        },
+        {
+          "comment": "security module functions",
+          "name": "support.function.security.feel",
+          "match": "(?<=security\\.)(rate_limit|report_failed|panic|kill_switch|audit|set_audit_log)\\b"
+        },
+        {
+          "comment": "env module functions",
+          "name": "support.function.env.feel",
+          "match": "(?<=env\\.)(get|has|set|load|all)\\b"
+        },
+        {
+          "comment": "cache module functions",
+          "name": "support.function.cache.feel",
+          "match": "(?<=cache\\.)(set|get|get_or_compute|has|delete|clear|size)\\b"
+        },
+        {
+          "comment": "session module functions",
+          "name": "support.function.session.feel",
+          "match": "(?<=session\\.)(set|get|clear)\\b"
+        },
+        {
+          "comment": "mail module functions",
+          "name": "support.function.mail.feel",
+          "match": "(?<=mail\\.)(send|provider|sent|clear_sent)\\b"
+        },
+        {
+          "comment": "queue module functions",
+          "name": "support.function.queue.feel",
+          "match": "(?<=queue\\.)(connect|enqueue|pop|complete|fail|pending|process_once|work)\\b"
+        },
+        {
+          "comment": "migrate module functions",
+          "name": "support.function.migrate.feel",
+          "match": "(?<=migrate\\.)(apply|status|run)\\b"
+        },
+        {
+          "comment": "http client module functions",
+          "name": "support.function.http.feel",
+          "match": "(?<=http\\.)(get|post|put|patch|delete|request)\\b"
+        }
+      ]
+    },
+    "record-type": {
+      "name": "entity.name.type.feel",
+      "match": "\\b[A-Z][a-zA-Z0-9]*\\b"
+    },
+    "function-call": {
+      "name": "entity.name.function.feel",
+      "match": "\\b([a-z_][a-zA-Z0-9_]*)(?=\\s*\\()"
+    },
+    "operator": {
+      "patterns": [
+        {
+          "name": "keyword.operator.arrow.feel",
+          "match": "->"
+        },
+        {
+          "name": "keyword.operator.pipe.feel",
+          "match": "\\|"
+        },
+        {
+          "name": "keyword.operator.comparison.feel",
+          "match": "==|!=|>=|<=|>|<"
+        },
+        {
+          "name": "keyword.operator.arithmetic.feel",
+          "match": "[+\\-*/]"
+        },
+        {
+          "name": "keyword.operator.assignment.feel",
+          "match": "(?<![=!<>])=(?!=)"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.separator.comma.feel",
+          "match": ","
+        },
+        {
+          "name": "punctuation.accessor.dot.feel",
+          "match": "\\."
+        },
+        {
+          "name": "punctuation.definition.block.feel",
+          "match": "[{}]"
+        },
+        {
+          "name": "punctuation.definition.bracket.feel",
+          "match": "[\\[\\]]"
+        },
+        {
+          "name": "punctuation.definition.paren.feel",
+          "match": "[()]"
+        },
+        {
+          "name": "punctuation.separator.colon.feel",
+          "match": ":"
+        }
+      ]
+    },
+    "identifier": {
+      "name": "variable.other.feel",
+      "match": "\\b[a-z_][a-zA-Z0-9_]*\\b"
+    }
+  }
+}
