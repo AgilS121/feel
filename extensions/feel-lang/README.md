@@ -59,7 +59,7 @@ The syntax highlighting and snippets work out of the box with **no dependencies*
 
 For the **Run File** and **Format Document** features, you need:
 - Python 3.8+ (for interpreter mode)
-- The Feel project installed: `git clone https://github.com/agil-bharata/feel`
+- The Feel project installed: `git clone https://github.com/AgilS121/feel.git`
 
 ## Extension Settings
 
